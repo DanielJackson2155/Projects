@@ -1,0 +1,2896 @@
+---
+title: "DSE6111 Final Project"
+author: "Daniel Jackson"
+date: "December 15th, 2023"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r classes, include=FALSE}
+# Libraries being used:
+library(corrplot)
+library(ggplot2)
+library(leaps)
+library(glmnet)
+library(pls)
+library(tree)
+library(randomForest)
+library(gbm)
+library(BART)
+library(MASS)
+library(class)
+library(e1071)
+```
+
+# Quantitative Regression, Principal Component Regression and Qualitative Regression
+## Introduction
+  The goal of this research paper is to effectively demonstrate how to use forms of regression to accurately predict real world outcomes from real world data sets. Our main goal is to see how well we can model the data and use that modeling from training data sets within the data to test how accurate our predictions are using test data sets. Rstudio was used to read in, clean up, and manipulate data, and the code that was proudced during my analysis can be found in the the appendix of this research paper.  
+  In the first section of this project, we will be using data from Condition Based Maintenance of Naval Propulsion Plants data set (Coraddu et al., 2014). Quantitative regression approaches and principal component regression approaches were utilized during analysis to create a model that predicts the gas turbine decay coefficient using predictors provided in data set. I will go into further detail of analysis later on.  
+  In the second section of this project, we will be using data from Wine Quality (Cortez et al., 2009). Qualitative regression approaches were utilized during analysis to create a model that predicts the quality of wine into two categories, good or bad, based on the wine quality score given to each wine by using numerous predictors in data set. I will also go into detail further of this analysis later in this project.  
+  The overall goal of this project is to use Rstudio and the various modeling methods within various packages to read in data, manipulate it, and find models that best fit the data by creating training sets and training models to predict test data. Both the training data and the test data are subsets of the data provided for each data set in this project. We will begin our analysis with the qualitative regression approaches that were used to predict the gas turbine decay coefficient response variable.  
+
+```{r CBM 1, include=FALSE}
+# Read in data for CBM
+cbm_df = read.table("uci_bm_dataset/data.txt", header = FALSE, colClasses = "numeric")
+colnames(cbm_df) = tolower(colnames(cbm_df))
+dim(cbm_df)
+```
+# Quantitative Regression
+## Data Introduction
+As mentioned in the introduction section above, we will be using the data from the Condition Based Maintenance of Naval Propulsion Plants data set (Coraddu et al., 2014). This data was collected in 2014 by a "numerical simulator of a naval vessel (Frigate) characterized by a Gas Turbine (GT) propulsion plant" (Coraddu et al., 2014). The foundational blocks of the simulator in the data have been developed and updated over the years using real propulsion plants. Therefore, we will assume that the data we are working with accurately reflects the results of a real gas turbine propulsion plant. Our goal of this analysis is to use quantitative regression to predict the gas turbine decay coefficient response variable using the predictors given by the data set.   
+In our analysis, we will explore and fit various models including linear regression, ridge regression, lasso regression, principal component regression, partial least squares regression, regression trees, bagging/random forests, boosting and Bayesian Additive Regression Treees (BART). To start it off, we will being with linear regression after cleaning up and refining our data.
+
+## Refining Data
+In the Condition Based Maintenance of Naval Propulsion plants (Coraddu et al., 2014) data, (we will use CBM for abbreviation in this analysis), there are 18 total variables provides. Below is a list of the variables and the the abbreviated variable names that we will be using in our analysis:  
+```{r CBM 2, include=FALSE}
+# Print names of each variable
+colnames(cbm_df)
+```
+v1 - Lever position.  
+v2 - Ship speed.  
+v3 - Gas turbine shaft torque.  
+v4 - Gas turbine rate of revolutions.  
+v5 - Gas tenerator rate of revolutions.  
+v6 - Starboard propeller torque.  
+v7 - Port propeller torque.  
+v8 - High pressure turbine exit temperature.  
+v9 - Gas turbine compressor inlet air temperature.  
+v10 - Gas turbine compressor outlet air temperature.  
+v11 - High pressure turbine exit pressure.  
+v12 - Gas turbine compressor inlet air pressure.  
+v13 - Gas turbine compressor outlet air pressure.  
+v14 - Gas turbine exhaust gas pressure.  
+v15 - Turbine injection control.  
+v16 - Fuel flow.  
+v17 - Gas turbine compressor decay state coefficient.  
+v18 - Gas turbine decay state coefficient.  
+
+Gas turbine decay state coefficient (v18) is our response variable. Based on the data set's information file, I know that gas turbine compressor decay state coefficient (v17) is also a response variable. Since we are only focused on the v18 response variable, we will remove v17 from our data set. Let's start by looking at a correlation matrix of the predictors to see how correlated they are :
+
+```{r CBM 3, echo = FALSE}
+cbm_df = cbm_df[, -which(names(cbm_df) == "v17")]
+# Correlation matrix:
+correlation_matrix = cor(cbm_df, use = "pairwise.complete.obs")
+corrplot::corrplot(correlation_matrix, method = 'color')
+```
+
+We see that the gas turbine compressor inlet air temperature (v9) variable and the gas turbine compressor inlet air pressure (v12) variables are producing either nothing or a question mark within the correlation matrix. We even get an error message in R saying standard deviation is 0. This is probably due to muilticollinearity or perfect collinearity, meaning that the v9 and v12 variables are linearly dependent on each other. Using R to check for which column sums have zero or near-zero variance, both v9 and v12 are returned. Therefore let's remove them and look at the correlation matrix again.
+
+```{r CBM 4, echo = FALSE}
+# Remove v9 and v12 variables
+cbm_df = cbm_df[, -which(names(cbm_df) == "v9")]
+cbm_df = cbm_df[, -which(names(cbm_df) == "v12")]
+# Try correlation matrix again:
+correlation_matrix = cor(cbm_df, use = "pairwise.complete.obs")
+corrplot::corrplot(correlation_matrix, method = "color")
+```
+
+Digging into the data more, I noticed that the starboard propeller torque (v6) predictor and the port propeller torque (v7) predictor had the same exact values. Using R to check, I was able to confirm that using R. Therefore, I removed the v7 predictor to avoid having the same predictor in our models twice. Let us look at the correlation matrix one more time.
+
+```{r CBM 5, echo = FALSE}
+are_same = all(cbm_df$v6 == cbm_df$v7)
+if (are_same) {
+  print("v6 and v7 are exactly the same.")
+} else {
+  print("v6 and v7 are different.")
+}
+# Returns: v6 and v7 are exactly the same.
+# Remove v7 predictor
+cbm_df = cbm_df[, -which(names(cbm_df) == "v7")]
+# Correlation matrix
+correlation_matrix = cor(cbm_df)
+corrplot::corrplot(correlation_matrix, method = "color")
+```
+
+We see that there is heavy correlation between all of the predictors in the new data set using only 13 predictors since we have removed the v7, v9 and v12 predictor. We can now proceed with our analysis since we have cleaned up our data.
+
+## Training and Test Data
+There are 11,934 observations in the CBM data set. For the training data and test data that we will be using to predict the v18 response variable, we will split the data in half. One half of the data will be used for training our models and the other data will be used for testing our trained model. 
+```{r CBM 6, include = TRUE}
+11934 / 2
+set.seed(1)
+train = sample(1:nrow(cbm_df), 5967)
+cbm_train = cbm_df[train,]
+cbm_test = cbm_df[-train,]
+```
+
+Since there is an even number of observations in the data set, we can randomly split the data in half and use half of the data for training models, and the other half for testing. There will be 5967 observations in both the training and testing data sets.
+
+## Multiple Linear Regression
+In this section, we will try and model the data using multiple linear regression using the various predictors in our data set. We will use the training data to fit our models and try and predict the test data v18 response variables. Our goal is to find which model produces the lowest test mean squared error. The one that produces the smallest test mean squared error will be the data that we choose.
+
+### Best Subset Selection, Forward Selection, Backward Selection
+Now we want to look at using best subset selecition, forward selection and backward selection to determine how many variables we want to use in our model. We will first start by using best subset selection on the data with v18 as our response variable. We want to see how many variables we can use to model the data that will maximize the adjusted R^2 value and minimizes the Bayestion Information Criterion (BIC) and Mallow's Cp (Cp) values.
+
+```{r CBM 7, echo = FALSE}
+best_cbm = regsubsets(v18 ~., cbm_df, nvmax = 13)
+best_cbm_summary = summary(best_cbm)
+names(best_cbm_summary)
+# This returns R^2, RSS, adjusted R^2, Cp and BIC.
+best_cbm_summary$rsq
+# Plot RSS, adjusted R^2, Cp and BIC
+par(mfrow = c(2, 2))
+plot(best_cbm_summary$rss, xlab = "Number of Variables",
+     ylab = "RSS", type = "l")
+plot(best_cbm_summary$adjr2, xlab = "Number of Variables",
+     ylab = "Adjusted RSq", type = "l")
+# Plot red dot to indicate model with largest adjusted R^2
+which.max(best_cbm_summary$adjr2)
+# Returned 12
+points(12, best_cbm_summary$adjr2[12], col = "red", cex = 2, pch = 20)
+# Plot Cp and BIC stats and indicate models with smallest stat
+plot(best_cbm_summary$cp, xlab = "Number of Variables", ylab = "Cp", type = "l")
+which.min(best_cbm_summary$cp)
+# Returns 12
+points(12, best_cbm_summary$cp[12], col = "red", cex = 2,
+       pch = 20)
+which.min(best_cbm_summary$bic)
+# Returns 12
+plot(best_cbm_summary$bic, xlab = "Number of Variables",
+     ylab = "BIC", type = "l")
+points(12, best_cbm_summary$bic[12], col = "red", cex = 2,
+       pch = 20)
+```
+
+Using best subset selection, we see that 12 out of the 13 predictors will maximize our adjusted R^2 value and minimize the BIC and Cp values.  
+
+Using both the forward selection and backward selection methods in R, both models that incorporate 12 total predictors do not include the lever position (v1) predictor. 
+
+```{r CBM 8, include = FALSE, echo = TRUE}
+fwd_cbm = regsubsets(v18 ~., cbm_df, nvmax = 13, method = "forward")
+summary(fwd_cbm)
+# Best 12 predictor model removes v1
+
+# Use backward selection:
+bwd_cbm = regsubsets(v18 ~., cbm_df, nvmax = 13, method = "backward")
+summary(bwd_cbm)
+```
+
+Since v1 was not included in both the forward and backward selection models, I will keep that variable in mind as the first one removed in the models moving forward. My approach for the multiple linear regression will combine both forward and backward selection by using training data on test data while examining p-values and absolute values of t to add and remove variables from models. My goal is to try and make the model as simple as possible by maximizing the R^2 value and minimizing the test mean squared error.
+
+## Multiple Linear Regression continued
+Before I ran fitted a linear multiple regression model with all of the predictors on the training data, I wanted to see what the model looked like on the entire data set as a whole taking in all 5967 observations.
+
+```{r CBM 9, include = TRUE}
+cbm_lm = lm(v18 ~., cbm_df)
+summary(cbm_lm)
+```
+If we were to state that the null hypothesis is that none of the predictors in the linear model were statistically significant when it came to predicting v18, we could then reject the null hypothesis because the p-value for each predictor in this linear model is less than 0.05. Therefore, we know that each predictor plays a statistically significant part when it comes to predicting our response variable v18. The only variable that stands out in this model is v1 as it barely passes the p-value test with a p-value of 0.047. From the the knowledge that I gained from the best subset models and the forward/backward selection models I fit earlier, this result matches the fact that those models stated the that the 12 best predictor model would not include v1. Therefore, I decided to fit a linear model removing v1 as a predictor.  
+
+```{r CBM 10, include = TRUE}
+cbm_lm = lm(v18 ~. -v1, cbm_df)
+summary(cbm_lm)
+```
+All of the predictors p-values in this model which did the v1 predictor were less than 0.05, allowing us to reject the null hypothesis. This model also provided the same R^2 value, 91.1%, as the first model that included all of the predictors. Therefore, we did not lower the amount of variance explained by removing the v1 predictor.  
+I did try some further removal of the v1 predictor and predictors with negative coefficients in the linear model: starboard propellor torque (v6), high point turbine exit temperature (v8), gas turbine compressor outlet air pressure (v13), and turbine injection control (v15). This unfortunately caused many significant predictor's p-values in the model to be greater than 0.05, therefore we could not reject the null hypothesis. And the R^2 value decreased all the way to 24.33%.  
+
+```{r CBM 11, include = TRUE}
+cbm_lm = lm(v18 ~. - v1 - v6 - v8 - v13 - v15, cbm_df)
+summary(cbm_lm)
+```
+
+Now it is time to let the training data train the linear model that does not include the v1 predictor. We will then take the training model predictions and test them on the actual values of the v18 response variable in our test data set. The code I used is below and this will be the R code format that I used to find the test mean squared error for each of the linear regression models that I fitted in this section.
+
+```{r CBM 12, include = TRUE}
+train_cbm_lm = lm(v18 ~. - v1, cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+```
+
+All of the p-values for each predictor is less than 0 allowing us to reject the null hypothesis for the model fitted on the training data. The test mean squared error is equal to 0.00000515 which is very close to 0. This means that this model does a fantastic job of predicting the actual response values of v18 in our test data set.  
+Since all of the p-values are less than 0.05 in this model, I wanted to try and reduce the amount of predictors to simplify the model by removing predictors with the lowest absolute value of t without significantly impacting the R^2 value or the test mean squared error. After many trials of this to try and simplify the model with less predictors, I landed on a model that removed the removed the v1 predictor, the gas turbine compressor outlet air temperature (v10) predictor, and the gas turbine exhaust gas pressure (v14) predictor. This model has two less predictors than the previous model that just removed v1. The R^2 value is 90.81% and the test mean squared error is 0.00000536. Both R^2 and test mean squared error similar that previous model taht just removed the v1 predictor. 
+
+```{r CBM 13, include = TRUE}
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# MSE still close to 0.
+# R-squared is 90.81%%
+```
+
+Let us look at a scatter plot comparing the actual values of the response variable v18 in the test data versus the prediction values of v18 from our model fit on the training data.
+
+```{r CBM 14, echo = FALSE}
+par(mfrow = c(1, 1))
+plot_df = data.frame(Actual = cbm_test$v18, Predicted = pred_cbm_lm)
+
+ggplot(plot_df, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +  
+  # Adds a line of perfect prediction
+  labs(x = "Actual Gas Turbine Decay State Coefficient", 
+       y = "Predicted Gast Turbine Decay State Coefficient", 
+       title = "Actual vs. Predicted") +
+  theme_minimal()
+```
+
+We see from this plot of the actual versus prediction values of our v18 response variable, our predictions follow the line of perfect predictions very well, which further suggests that our model that we fit is a good model to use when making predictions.
+
+Let us now plot this model on the entire data set:
+
+```{r CBM 15, echo = FALSE}
+cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_df)
+par(mfrow = c(2, 2))
+plot(cbm_lm)
+```
+
+Looking at the random scattering of the residuals around 0 in the residuals vs fitted plot, we do not see any major pattern, which means our model is a good fit. Looking at the Q-Q residuals plot we see that a majority of the data fitted by the model follows normal distribution but with a curve off on the extremities meaning there may be some extreme values in this plot. There also seems to be a few leverage points in the data but not too many.  
+
+After fitting this model, I then tried some transformations and interactions on the predictors to see if I could lower my test mean squared anymore and also raise my R^2 value. I tried a square root transformation on all of the predictors, a squared transformation on all of the predictors, a cubed transformation on all of the predictors and a log transformation on all of the predictors. Of the transformations that I did, the square root transformation produced a test mean square error of 0.00000389 and a R^2 value of 93.21%. This test mean squared error is smaller than the model with no transformations and a the R^2 on the training data is also higher in this mode by about 3%.  
+
+I created a model off of the square root transformation model. It is model where the highest correlated predictors were transformed and then interacted with each other. Here are the list of predictors that I had interact with each other in this model: 
+
+sqrt(v2) and sqrt(v5). 
+sqrt(v4) and sqrt(v11)
+sqrt(v3) and sqrt(v6)
+sqrt(v8) and sart(v13)
+and v16 on its own.  
+
+This model:  
+
+```{r CBM 15 a, eval = FALSE}
+lm(v18 ~ sqrt(v2)*sqrt(v5) + sqrt(v4)*sqrt(v11) + sqrt(v3)*sqrt(v6) +
+                    sqrt(v8)*sqrt(v13) + sqrt(v16), cbm_train)
+```
+                    
+provided a R^2 value on the training data of 94.82% and the mean squared test error rate of 0.00000295 was lowest rate of all the models we fit. Let us plot the predicted values of v18 from this transformed model versus the actual values of v18.
+
+```{r CBM 16, include = FALSE}
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_train)
+summary(train_cbm_lm)
+# Same as this model:
+train_cbm_lm = lm(v18 ~ v2 + v3 + v4 + v5 + v6 + v8 + v11 +
+                    v13 + v15 + v16, cbm_train)
+summary(train_cbm_lm)
+
+# Try sqrt():
+train_cbm_lm = lm(v18 ~ sqrt(v2) + sqrt(v3) + sqrt(v4) + sqrt(v5) + sqrt(v6) +
+                  sqrt(v8) + sqrt(v11) + sqrt(v13) + v15 + sqrt(v16), cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05 besides v15.
+# Test MSE still close to 0.
+# R-squared is 93.21%%
+# Try model without square ro0ting v15.
+# p-value still greater than 0.05.
+# Remove v15 predictor
+train_cbm_lm = lm(v18 ~ sqrt(v2) + sqrt(v3) + sqrt(v4) + sqrt(v5) + sqrt(v6) +
+                    sqrt(v8) + sqrt(v11) + sqrt(v13)  + sqrt(v16), cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# Test MSE still close to 0.
+# R-squared is 93.21%%
+
+# Try squared:
+train_cbm_lm = lm(v18 ~ I(v2)^2 + I(v3)^2 + I(v4)^2 + I(v5)^2 + I(v6)^2 +
+                    I(v8)^2 + I(v11)^2 + I(v13)^2 + I(v15)^2 + I(v16)^2, cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# Test MSE still close to 0.
+# R-squared is 90.81%%
+
+# Try cubed:
+train_cbm_lm = lm(v18 ~ I(v2)^3 + I(v3)^3 + I(v4)^3 + I(v5)^3 + I(v6)^3 +
+                    I(v8)^3 + I(v11)^3 + I(v13)^3 + I(v15)^3 + I(v16)^3, cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# Test MSE still close to 0.
+# R-squared is 90.81%%
+
+# Sqrt() transformation is highest R-squared value so far with test MSE being
+## 0.
+
+# Try interactions of sqrt() model
+# Look at most correlated variables using these predictors:
+cor(cbm_df)
+best_train_cbm_lm = lm(v18 ~ sqrt(v2)*sqrt(v5) + sqrt(v4)*sqrt(v11) + sqrt(v3)*sqrt(v6) +
+                    sqrt(v8)*sqrt(v13) + sqrt(v16), cbm_train)
+summary(best_train_cbm_lm)
+best_pred_cbm_lm = predict(best_train_cbm_lm, newdata = cbm_test)
+mean((best_pred_cbm_lm - cbm_test$v18)^2)
+# This raised R-squared to 94.82%
+# Tried other variations. This was the best R-squared value that I got.
+# Test MSE = 0.00000295
+```
+
+```{r CBM 17, echo = FALSE}
+par(mfrow = c(1, 1))
+plot_df_1 = data.frame(Actual = cbm_test$v18, Predicted = best_pred_cbm_lm)
+
+ggplot(plot_df, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +  # Adds a line of perfect prediction
+  labs(x = "Actual Gas Turbine Decay State Coefficient", 
+       y = "Predicted Gast Turbine Decay State Coefficient", 
+       title = "Actual vs. Predicted") +
+  theme_minimal()
+```
+
+As you can see, this model does a great job of predicting the actual values of v18 from the square root transformed model that does not factor in the v1, v10 or v14 predictor. Just to summarize what predictors we are using in this square root transformed linear model:
+
+v2 - Ship speed. 
+v3 - Gas turbine shaft torque.  
+v4 - Gas turbine rate of revolutions.  
+v5 - Gas tenerator rate of revolutions.  
+v6 - Starboard propeller torque.  
+v8 - High pressure turbine exit temperature. 
+v11 - High pressure turbine exit pressure.  
+v13 - Gas turbine compressor outlet air pressure.  
+v15 - Turbine injecton control.  
+v16 - Fuel flow.  
+
+Now, let us look at a ridge regression model to see what sort of results we get there.  
+
+## Ridge Regression
+
+Using ridge regression, our goal here is to see if we can produce a test mean squared error less than the the mean squared error that we found in the square root transformed model from the linear regression section above. What we will first is create a training matrix and a test matrix for our ridge regression. Using cross-validation, I found that the best shrinking parameter, lambda, to use for this model is when lambda = 0.00004. Using lambda = 0.00004 in my ridge regression model using the training matrix to predict the response v18 values in the test data, I found a test mean squared error of 0.000048. This test mean squared error, although small, is not as small as the test error from the model we created in the linear regression section above.  
+
+```{r CBM 18, include = FALSE, echo = TRUE}
+library(glmnet)
+# Perform ridge regression on data
+set.seed(1)
+train_matrix = model.matrix(v18~., cbm_train)
+test_matrix = model.matrix(v18~., cbm_test)
+# Now we need to select lambda using cross-validation
+cv_out = cv.glmnet(train_matrix, cbm_train$v18, alpha = 0)
+best_lam = cv_out$lambda.min
+best_lam
+# Lambda chosen by cross-validation is 0.00004
+# Now we fit ridge regression model and make predictions:
+cbm_ridge = glmnet(train_matrix, cbm_train$v18, alpha = 0)
+pred_cbm_ridge = predict(cbm_ridge, s = best_lam, newx = test_matrix)
+# Find test error:
+mean((pred_cbm_ridge - cbm_test$v18)^2)
+```
+
+```{r CBM 19, echo = FALSE}
+plot(cbm_ridge)
+```
+
+The blue line shows how the coefficients in the ridge regression model change as the the lambda value varies. The thin black line represents the lambda value of 0.00004 that we used as the shrinking paramater. Now, let us fit a lasso regression model.  
+
+
+## Lasso Regression
+
+Now we will fit a lasso regression model to the data. We will use the same training and test matrices created in the ridge regression model from the previous section to fit this lasso regression model. The best shrinking parameter, lambda, to use in the lasso regression model is when lambda = 0.00000549. Using that lambda in the regression model, we get a test mean squared error value of 0.0000095. This test mean squared error is not the smallest test mean squared error that we have seen so far.
+
+```{r CBM 20, include = FALSE}
+# Perform lasso regression
+set.seed(1)
+# Select lambda using cross-validation
+cv_lam = cv.glmnet(train_matrix, cbm_train$v18, alpha = 1)
+best_lam = cv_lam$lambda.min
+best_lam
+# Lambda chosen by cross-validation is 0.00000505
+# Now we fit lasso regression model and make predictions:
+cbm_lasso = glmnet(train_matrix, cbm_train$v18, alpha = 1)
+pred_cbm_lasso = predict(cbm_lasso, s = best_lam, newx = test_matrix)
+# Find test error:
+mean((pred_cbm_lasso - cbm_test$v18)^2)
+```
+
+```{r CBM 21, echo = FALSE}
+plot(cbm_lasso)
+```
+
+Just like in the ridge regression model, the blue line represents how the coefficients in the lasso model are affected by the shrinking parameter, lambda. The red line indicates the coefficient paths of the predictors as lambda changes and the green line represents the value of lambda that we got from cross-validation, which equaled 0.00000549. Now, let us look at principal components regression.
+
+## Principal Components Regression
+The main goal of principal components regression is to reduce the dimensions of the model by removing predictors to simplify the model. Let us fit a principal components regression model using the training data to then predict the response variable v18 in the test data.
+
+```{r CBM 22, echo = FALSE}
+set.seed(1)
+cbm_pcr = pcr(v18~., data = cbm_train, 
+              scale = TRUE, validation = "CV")
+summary(cbm_pcr)
+validationplot(cbm_pcr, val.type = "MSEP")
+```
+
+We see that where M = 10, 11 and 12 produces the lowest mean squared error prediction value. However, we are trying our best to reduce the dimensions of the model.  
+When we fit a principal component regression using M = 11, we get a mean squared test error of 0.00000605. 
+
+```{r CBM 23, include = FALSE, echo = TRUE}
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 11)
+mean((pred_pcr - cbm_test$v18)^2)
+```
+
+When we fit a principal component regression using M = 10, we get a mean squared test error of 0.0000223. 
+
+```{r CBM 24, include = FALSE, echo = TRUE}
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 10)
+mean((pred_pcr - cbm_test$v18)^2)
+```
+
+When we fit a principal component regression using M = 9, we get a mean squared test error of 0.0000223. Same mean squared test error when M = 10.
+
+```{r CBM 25, include = FALSE, echo = TRUE}
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 9)
+mean((pred_pcr - cbm_test$v18)^2)
+```
+
+Any other lower M value will drastically lower the mean squared test error value. Although the goal of principal component regression model is to reduce the dimensions, the model where M = 11 results in the lowest mean squared test error value without using all of the 12 predictors in the model. Now let us fit a partial least squares model.
+
+## Partial Least Squares
+
+We will now try and reduce the dimensions by fitting a partial least squares model. Our goal, once again, is to create a more simple model.
+
+```{r CBM 26, echo = FALSE}
+set.seed(1)
+cbm_pls = plsr(v18~., data = cbm_train, 
+               scale = TRUE, validation = "CV")
+summary(cbm_pls)
+validationplot(cbm_pls, val.type = "MSEP")
+```
+
+Once again, we see that the lowest mean squared error prediction occurs when M = 12, but we want to reduce our dimensions in this model. Looking at the graph let us try when M = 10. M = 10 provides us with a mean squared test error rate of 0.00000578.
+
+```{r CBM 27, include = FALSE, echo = TRUE}
+pred_pls = predict(cbm_pls, cbm_test, ncomp = 10)
+mean((pred_pls - cbm_test$v18)^2)
+```
+
+When M = 9, we get a mean squared test error rate of 0.0000113.
+
+```{r CBM 28, include = FALSE, echo = TRUE}
+pred_pls = predict(cbm_pls, cbm_test, ncomp = 8)
+mean((pred_pls - cbm_test$v18)^2)
+```
+
+When M = 8, we get a mean squared test error rate of 0.0000144.  
+
+As we can see, the lowest mean squared error rate occurs when M = 10 in our partial least squares model. This is one lest predictor than what we saw in the principal component regression model we fitted in the previous model, which is a step in the right direct with what we are trying to achieve with these dimension reducing regression methods. Now, let us look at regression trees.
+
+## Regression Trees
+We will now fit a regression tree using our training data set and analyze how many terminal nodes we will have. 
+
+```{r CBM 29, echo = FALSE}
+cbm_tree = tree(v18 ~ ., cbm_train)
+summary(cbm_tree)
+plot(cbm_tree)
+text(cbm_tree, pretty = 0)
+```
+
+We see that this tree is quite messy and very hard to interpret. This is due to the fact that there are 21 terminal nodes in this regression tree. We do see that the only predictors used in the regression tree are v3, v13, v5, v4, v14, v10 and v11. The test mean squared error for this regression tree is 0.0000191.
+
+```{r CBM 30, include = FALSE, echo = TRUE}
+yhat = predict(cbm_tree, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+```
+
+Since this tree is quite confusing to understand, we want to try and prune the tree using cross-validation.
+
+```{r CBM 31, include = FALSE, echo = TRUE}
+cv_tree_cbm = cv.tree(cbm_tree)
+plot(cv_tree_cbm$size, cv_tree_cbm$dev, type = "b")
+```
+
+We see that the variance is lowest when we have 21 terminal nodes. Using this graph above, let us try a tree with 15, 11, 9 and 8 terminal nodes without sacrificing our variance to see which one produces a low test mean squared error rate while creating a more interpretable tree.
+
+```{r CBM 32, include = FALSE, echo = TRUE}
+cbm_prune = prune.tree(cbm_tree, best = 15)
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+```
+
+```{r CBM 33, include = FALSE, echo = TRUE}
+cbm_prune = prune.tree(cbm_tree, best = 11)
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+```
+
+```{r CBM 34, include = FALSE, echo = TRUE}
+cbm_prune = prune.tree(cbm_tree, best = 19)
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+```
+
+```{r CBM 35, include = FALSE, echo = TRUE}
+cbm_prune = prune.tree(cbm_tree, best = 8)
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+```
+
+The mean squared test error rate with 15 terminal nodes is 0.0000231.  
+The mean squared test error rate with 11 terminal nodes is 0.0000284. 
+The mean squared test error rate with 9 terminal nodes is 0.0000206. 
+The mean squared test error rate with 8 terminal nodes is 0.0000363. 
+
+The pruned tree with 8 terminal nodes has slightly higer test mean squared error than regression tree with 21 terminal nodes, but this tree is much simplier to understand. Now, let us fit a bagging and random forest model.
+
+```{r CBM 36, echo = FALSE}
+plot(cbm_prune)
+text(cbm_prune, pretty = 0)
+```
+
+## Bagging and Random Forests
+Now we will fit a bagging model and multiple random forest models and find the test mean squared error rate to see how they compare to previous models. Let us first fit a bagging model using 500 trees that utilizes all 13 predictors at each split.
+
+```{r CBM 37, include = TRUE}
+set.seed(1)
+cbm_bag = randomForest(v18 ~., data = cbm_train, mtry = 13, importance = TRUE)
+cbm_bag
+yhat_bag = predict(cbm_bag, newdata = cbm_test)
+mean((yhat_bag - cbm_test$v18)^2)
+```
+
+In a bagging model using all 13 predictors, 98.45% of the variance is explained in the training data set and the test mean squared error rate is 0.000000858. This is the lowest test mean squared error of any model that we have fit to this point. Now, let us look at some random forests where we try different number of trees and variables used at each split to try and simplify our bagging model. We will first try 25 trees and use all 13 predictors at each split.
+
+```{r CBM 38, include = TRUE}
+set.seed(1)
+cbm_rf = randomForest(v18 ~., data = cbm_train, ntree = 25,
+                       mtry = 13, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+```
+
+In this random forest model, 96.95% of the variance is explained and the mean squared test error rate is 0.000000969.  
+
+Now, let us try with 10 predictors and 25 trees.  
+
+```{r CBM 39, include = TRUE}
+set.seed(1)
+cbm_rf = randomForest(v18 ~., data = cbm_train, ntree = 25,
+                       mtry = 10, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+```
+
+97.86% of variance explained in this model and the mean squared test error rate is 0.00000102.  
+Now, let us try with 10 variables and 10 trees.
+
+```{r CBM 40, include = TRUE}
+set.seed(1)
+cbm_bag = randomForest(v18 ~., data = cbm_train, ntree = 10,
+                       mtry = 10, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+```
+
+97.86% of variance explained in this model and a mean squared test error rate of 0.00000102.  
+
+As you reduce the number of variables and the trees to less than 10 variables and less than 25 trees, you are not making significant impact on the mean squared test error. The best model so far from the random forest models that we have fit is when there are 13 variables and 25 trees. Although the mean squared test error rate was smallest when we used all 13 variables and 500 trees, the processing time on that model was just not as quick as the one with 25 trees. And there was not a significant delta in the mean squared test error rate to justify a model with that slow of a repsonse time to fit. Now, we will fit a boosted model.  
+
+## Boosting
+In this section, we will fit a boosted model using the training data and will make predicitions on that model using the test data to compare. We will try a few different shrinking paramater lambda values to compare mean squared test error rates of models. Our boosted models that we will fit will use lambda values of 0.001, 0.01. 0.1, and 0.2 and 1000 trees.
+
+```{r CBM 41, include = TRUE}
+# lambda = 0.001:
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                      n.trees = 1000)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                       n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+```
+
+```{r CBM 42, include = TRUE}
+# lamda = 0.01
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.01)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                     n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+```
+
+```{r CBM 43, include = TRUE}
+# lamda = 0.1
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.1)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                     n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+```
+
+```{r CBM 44, include = TRUE}
+# lamda = 0.2
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.2)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                     n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+```
+
+The mean squared test error rate with shrinking parameter of 0.001 is 0.0000179.  
+The mean squared test error rate with shrinking parameter of 0.01 is 0.0000448.  
+The mean squared test error rate with shrinking parameter of 0.1 is 0.0000179.  
+The mean squared test error rate with shrinking parameter of 0.2 is 0.00001. 
+
+The smallest mean squared test error rate occurred when we had a shrinking parameter lamda value of 0.2. Now, we will fit our final regression model on this data: the Bayesian Additive Regression Trees (BART).
+
+## Bayesian Additive Regression Trees (BART)
+We will now fit a BART model to this data. We will need to re-establish our training and test data for this model first before we can create the model. Then we will find the mean squared test error rate using the new training data and test data to compare predictions.
+```{r CBM 45, include = FALSE}
+x1 = cbm_df[, 1:13]
+y1 = cbm_df[,"v18"]
+
+xtrain1 = x1[train,]
+ytrain1 = y1[train]
+
+xtest1 = x1[-train,]
+ytest1 = y1[-train]
+set.seed(1)
+cbm_bart = gbart(xtrain1, ytrain1, x.test = xtest1)
+```
+
+```{r CBM 46, include = TRUE}
+yhat_bart = cbm_bart$yhat.test.mean 
+mean((ytest1 - yhat_bart)^2)
+```
+
+The mean squared test error rate of the BART model is 0.00000414.
+
+## Test Mean Squared Error Summary
+Here are the mean squared test error rates of each model that we fit. 
+
+Linear regression model: 0.00000295 with R^2 value of 94.82%.  
+
+Ridge Regression Model: 0.000048.  
+
+Lasso Regression Model: 0.0000095.  
+
+Principal Component Regression Model: 0.00000605.  
+
+Partial Least Squares Model: 0.00000578.  
+
+Regression Tree Model: 0.0000363 with tree that has 8 terminal nodes (this was the most interpretable regression tree). 
+
+Bagging Model: 0.000000858 using 500 trees and trying all 13 predictors at each split, 98.45% of variance explained in training data.  
+
+Random Forest Model: 0.000000969. 25 trees and 13 predictors at each split. 97.96% of variance explained in training data.
+
+Boosting Model: 0.00001 using lambda shrinking parameter of 0.2.  
+
+BART Model: 0.00000414.  
+
+## Conclusion
+As we can see from the mean squared test error values in the section above, all of the models seemed to do a great job at predicting our response variable, the gas turbine decay state coefficient, as all of the test mean squared error values are very close to 0. I ultimately believe that you can choose any one of these models to confidently predict that response variable using the predictors given in each model. I believe the best way to choose which model best predicts our response variable does not rely strictly on the mean squared test error, but on which model is easiest to interpret and which one takes the least amount of processing time to fit training data and predict test data.  
+
+For instance, of all of the quantitative regression models that we fit, the bagging model that used 500 trees and all 13 predictors at each split produced the lowest test error rate of 0.000000858. However, the processing time that the code took in order to produce the model took far too long compared to the random forest model that used 25 trees and 13 predictors at each split. This random forest model produced a mean squared test error rate of 0.000000969 and the model on the training data explained 97.96%.  
+
+Since all of the models produced a mean squared test error close to 0, I am going to choose the linear regression model where we squared the the predictors and interacted multiple predictors. The model is below:
+
+```{r CBM 47, eval = FALSE}
+lm(v18 ~ sqrt(v2)*sqrt(v5) + sqrt(v4)*sqrt(v11) + sqrt(v3)*sqrt(v6) +
+                    sqrt(v8)*sqrt(v13) + sqrt(v16), cbm_train)
+```
+
+I do not believe that there is a big enough difference in the various mean squared test error rates that we obtained to forgo the linear model that we created in the multiple linear regression section of this research project. Therefore, I believe the linear model that I created using the square root transformation and certain interactions between those square rooted variables is the easiest model to grasp for those who are familiar with linear models and those who are not. Being able to provide a model that allows the user to plug in values for each predictor to help them predict the gas turbine decay state coefficient response value, allows a user-friendly, and easy-to-understand experience. Plus, a linear model is the most basic form of linear regression to work with which furthermore enhances the convenience of conveying the model to one another to enhance their understanding of it.
+
+# Qualitative Regression
+## Data Introduction
+In our qualitative regression analysis, we will be using the Wine Quality data set which models wine quality based on physicochemical tests using a data set of red and white vinho verde samples gathered in northern Portugal in 2009 (Cortez et al., 2009).  
+This wine data includes two separate sets of data. The first data set contains 1599 observations of red wine tests and 4898 observations of white wine tests. In order to maximize my sample size, I combined the two data sets together to create one data set that included 6497 observations. In the combined data set, the wine quality scoring ranged from 3 to 9. In order to make predictions on this data using qualitative regression, I manipulated the data so that if the wine quality score was between 3 and 5, we labeled the wine quality score as "poor" quality and if the wine quality score was between 6 and 9, we labeled the wine quality score as "good" quality. Our goal is to use qualitative regression to fit a model that accurately classifies the wine quality score as either "poor" or "good" based on the predictors given to us in the data set.  
+In this analysis, we will use and fit various qualitative regression models such as logistic regression, linear discriminant analysis (LDA), quadratic descriptive analysis (QDA), K-nearest neighbors (KNN) regression, naive Bayes regression, poisson regression, and classification trees (such as pruning trees, bagging, random forests, boosting and Bayesian Additive Trees (Bart)). We wil start with logistic regression once we clean up and refined data.  
+
+## Refining Data
+In the Wine Quality data set, when we combined the red and the white wine data sets, we created one data set that included 6497 observations. This means that we have 6497 different wines from northern Portugal to analyze to help us fit our model. In this model, there are 11 total predictors that we can use in our analysis to help us predict our wine quality response variable.  Below is a list of those predictors:  
+
+```{r wine, include = FALSE, echo = TRUE}
+red_wine_df = read.csv("wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+dim(wine_df)
+colnames(wine_df)
+```
+Fixed acidity.  
+Volatile acidity.  
+Citric acid.  
+Residual sugar.  
+Chlorides.  
+Free sulfur dioxide.  
+Total sulfur dioxide.  
+Density.  
+pH.  
+Sulphates.  
+Alcohol.  
+
+In order to utilize a qualitative regression appraoch, we will manipulate the quality response variable into a bernoulli variable that will take on the value of 0 if the wine quality is poor (wine quality score from 3-6) or the value of 1 if the wine quality is good (wine quality score from 7-9).  
+
+```{r wine 1, include = FALSE, echo = TRUE}
+range(wine_df$quality)
+# 3 to 9.
+# Use for loop to categorize wine quality 3-5 as poor and 6-9 as good:
+# 0 will equal poor. 
+# 1 will equal good.
+for (i in 1:length(wine_df$quality)) {
+  if (wine_df$quality[i] >= 3 & wine_df$quality[i] <= 5) {
+    wine_df$quality[i] = 0
+  } else if (wine_df$quality[i] >= 6 & wine_df$quality[i] <= 9) {
+    wine_df$quality[i] = 1
+  } else {
+    wine_df$quality[i] = NA  # Handle values outside the specified ranges
+  }
+}
+```
+
+## Training and Test Data
+
+Just like in our qualitative regression analysis from earlier, we want to create a training and test data set using the 6497 observations that we have. Just like before, we will split this in half. Since the number of observations is an odd number, one of our data sets will have one more observation than the other. For no particular reason, I had the test data set have the one more variable than the training data. Therefore the training data set has 3248 observations and the test data set has 3249 observations. Now, we will start with our logistic regression.  
+
+```{r wine 2, include = TRUE}
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+```
+
+## Logistic Regression
+Looking at our logistic regression model using all 11 of the predictors in our wine quality data set, and using a null hypothesis that none of the predictors are statistically significant in predicting our quality response variable, we can reject the null hypothesis on a total of 8 predictors as their p-values are less than 0.05.
+
+```{r wine 3, include = TRUE}
+glm_wine = glm(quality~., wine_df, family = binomial)
+summary(glm_wine)
+```
+
+The 8 predictors that we do not reject are:
+
+Volatile acidity. 
+Citric acid. 
+Residual sugar. 
+Free sulfur dioxide. 
+Total sulfur dioxide. 
+pH.  
+Sulphates.  
+Alcohol.  
+
+We do see that 3 of the predictors have p-values greater than 0.05, so we fail to reject
+the null hypothesis on those predictors. With that being said, we remove them. Here are the 3 predictors being removed from the model:  
+
+Fixed acidity. 
+Chlorides.  
+Density.  
+
+```{r wine 4, include = TRUE}
+glm_wine = glm(quality ~. - fixed_acidity - chlorides - density, 
+               wine_df, family = binomial)
+summary(glm_wine)
+```
+
+When we fit a model that removes those those 3 predictors, we see that we also fail to reject the null hypothesis on the pH predictor as it's p-value is greater than 0.05.
+
+```{r wine 5, include = TRUE}
+glm_wine = glm(quality ~. - fixed_acidity - chlorides - density - ph, 
+               wine_df, family = binomial)
+summary(glm_wine)
+```
+
+After removing the pH predictor, all of the predictors left have p-values that are less than 0.05. Therefore we can reject the null hypothesis and say that these predictors have statistical significance when modeling the entire data set with quality as the response variable.  
+Now, let us predict the quality response variable using the entire data set. We will convert probabilities to binary predictions, either 0 for poor or 1 for good. We can then use a confusion matrix to predict the quality response variable as either 0 or 1 and measure results.
+
+```{r wine 6, include = TRUE}
+# Predict on the entire dataset using the logistic model
+pred_probs = predict(glm_wine, newdata = wine_df, type = "response")
+
+# Convert probabilities to binary predictions (0 or 1)
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+
+# Construct confusion matrix:
+conf_matrix = table(wine_df$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (1357 + 3464)/6497
+# Returns 0.7420
+# Results in prediction error of:
+1 - accurate_pred
+# 0.2579 or 25.8%
+```
+
+When we predict the quality response variable to be either 0 or 1, we get a prediction rate of 74.20%, or a 25.80% prediction error rate. This is a fairly good prediction rate but we know that this prediction is over-fitted because we used the entire data set to train the model, then used the entire model to test our predictions.  
+Let us now create a logistic regression using the training data and we can then use the test data to see how accurate our predictions of the quality response variable are. 
+
+```{r wine 7, include = TRUE}
+# Let's use training and test data. Use training data to create model then
+## test data to test the model:
+glm_wine = glm(quality ~., wine_train, family = binomial)
+summary(glm_wine)
+# Looking at p-values, we will leave out following variables:
+# chlorides
+glm_wine = glm(quality~. - chlorides, wine_train, family = binomial)
+summary(glm_wine)
+# Remove predictors that are barely significant to see if that changes 
+## prediction rate to simplify model:
+# citric_acid
+# density
+# ph
+glm_wine = glm(quality~. - chlorides - citric_acid - 
+                 density - ph, wine_train, family = binomial)
+summary(glm_wine)
+# fixed_acidity no longer significant
+glm_wine = glm(quality~. - chlorides - citric_acid - 
+                 density - ph - fixed_acidity, wine_train, family = binomial)
+# Same as:
+glm_wine = glm(quality ~ volatile_acidity + residual_sugar +
+                 free_sulfur_dioxide + total_sulfur_dioxide + sulphates +
+                 alcohol, wine_train, family = binomial)
+summary(glm_wine)
+
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (671 + 1733) / 3249
+# Returns 0.73992
+1 - accurate_pred
+# Prediction error of 0.26 or 26%.
+```
+
+Following the same process that we did when we fit our first regression model, we first removed the chloride predictor as we could not reject the null hypothesis on it as its p-value was greater than 0.05. When we re-fit the model without the chloride predictor, we had 3 predictors that had p-values barely less than 0.05, meaning they are barely significant enough. Those 3 predictors were: citric acid, density and pH. When we fit the new model without those 3 predictors, we saw that the fixed acidity predictor was no longer significant as we failed to reject the null hypothesis on it. Our final logistic regression model included the following predictors that all rejected the null hypothesis: volatile acidity, residual sugar, free sulfur dioxide, total sulfure dioxide, sulphates and alcohol. Usin this final model to predict the quality response value as either 0 or 1 led to a 73.99% prediction accuracy, or 26.01% prediction error rate. This prediction rate is almost identical to the prediction accuracy rate from the model fitted on the entire data set plus it is less bias as we tested the model predictions on the test data, which was not used to fit the model.  
+
+### Transformations and Interactions
+I tried multiple interaction terms on logistic model we fit above using the training data and testing our predictions on the test data. I could produce a model that had greater prediction rate than the one we fitted. Therefore I moved onto some transformations.
+
+```{r wine 8, include = TRUE}
+# Interaction terms:
+glm_wine = glm(quality ~ volatile_acidity + residual_sugar +
+                 free_sulfur_dioxide + total_sulfur_dioxide + sulphates*alcohol, 
+               wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (670 + 1733) / 3249
+# This produced similar prediction rate of 74%
+```
+
+I first tried a square root transformation on all of the predictors.
+```{r wine 9, include = TRUE}
+# Try sqrt:
+glm_wine = glm(quality ~ sqrt(volatile_acidity) + sqrt(residual_sugar) +
+                 sqrt(free_sulfur_dioxide) + sqrt(total_sulfur_dioxide) + 
+                 sqrt(sulphates) + sqrt(alcohol), wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (691 + 1733) / 3249
+# 74.6%. Highest prediction rate yet.
+```
+
+The square root model produced a 74.6% prediction rate.
+
+I also performed a squared transformation on all of the predictors in the model.
+```{r wine 10, include = TRUE}
+glm_wine = glm(quality ~ I(volatile_acidity)^2 + I(residual_sugar)^2 +
+                 I(free_sulfur_dioxide)^2 + I(total_sulfur_dioxide)^2 + 
+                 I(sulphates)^2 + I(alcohol)^2, wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (671 + 1733) / 3249
+# 73.99%.
+```
+
+The model that squared all of the predictors produced a 73.99% prediction rate.
+
+I performed a cubed transformation on all of the predictors.
+
+```{r wine 11, include = TRUE}
+glm_wine = glm(quality ~ I(volatile_acidity)^3 + I(residual_sugar)^3 +
+                 I(free_sulfur_dioxide)^3 + I(total_sulfur_dioxide)^3 + 
+                 I(sulphates)^3 + I(alcohol)^3, wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (671 + 1733) / 3249
+# 73.99%.
+```
+
+The cubed model produced a prediction rate of 73.99%, which was the same as the model that squared all of the predictors above.
+
+I then performed a log transformation on all of the predictors. 
+
+```{r wine 12, include = TRUE}
+# Try log transformation:
+glm_wine = glm(quality ~ log(volatile_acidity) + log(residual_sugar) +
+                 log(free_sulfur_dioxide) + log(total_sulfur_dioxide) + 
+                 log(sulphates) + log(alcohol), wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (710 + 1725) / 3249
+# 74.96%. 
+```
+
+This model produced a prediction rate of 74.96%. This model has produced the highest prediction rate thus far compared to the previous models fitted using the training data. Let us know perform a linear discrimination analysis using our training data to predict the test data.  
+
+## Linear Discrimination Analysis (LDA)
+Now we will run a linear discrimination analysis using our training data. We will use the same predictors that we obtained from our logistic regression model from the section above.  
+
+```{r wine 13, include = TRUE}
+lda_wine = lda(quality ~., wine_train)
+summary(lda_wine)
+lda_pred = predict(lda_wine, wine_test)
+lda_class = lda_pred$class
+table(lda_class, wine_test$quality)
+accurate_pred = mean(lda_class == wine_test$quality)
+# Prediction rate = 0.7371 or 73.56%
+# Prediction error rate of:
+1 - accurate_pred
+# 0.2629 or 26.29%
+```
+
+The linear discrimination analysis model produced an accurate prediction rate of 73.56% which is very close to the prediction rate produced by our logistic regression model that we already fit. Let us now move onto a quadratic descriptive analysis.  
+
+## Quadratic Descriptive Analysis (QDA)
+Let us see if we can enhance our prediction rate by fitting a a quadratic descriptive analysis model to our training data. 
+
+```{r wine 14, include = TRUE}
+qda_wine = qda(quality ~., wine_train)
+qda_wine
+
+qda_class = predict(qda_wine, wine_test)$class
+table(qda_class, wine_test$quality)
+accurate_pred = mean(qda_class == wine_test$quality)
+# Prediction rate of 0.7291 or 72.91%
+# Prediction error rate of:
+1 - accurate_pred
+# 0.2709 or 27.09%
+```
+
+This model produced a prediction rate of 72.91%. Now let us fit a K-nearest neighbor model using various values of K.  
+
+## K-Nearest Neighbors Model
+We will now fit a K-nearest neighbors model using the training data to then predict the test data. We will use the variables selected from our logistic regression model: volatile acidity, residual sugar, free sulfur dioxide, total sulfur dioxide, sulphates and alcohol. We will use a few different numbers of K. We will start with K = 1, meaning the instance will be assigned to the same class as its single nearest neighbor.  
+
+K = 1:
+```{r wine 15, include = FALSE, echo = TRUE}
+# Predictor variables used in glm_wine
+predictor_vars = c('volatile_acidity', 'residual_sugar',
+                         'free_sulfur_dioxide', 'total_sulfur_dioxide',
+                         'sulphates', 'alcohol')
+
+# Extract predictor variables from wine_train
+train_data = wine_train[, predictor_vars]
+
+# Define the test data
+test_data = wine_test[, predictor_vars]
+
+# Perform KNN prediction
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 1)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (692 + 1581) / 3249
+# Prediction rate is 0.6995
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3004 or 34.04%.
+```
+This produced a prediction rate of 69.95%. This is the worst prediction rate thus far.
+
+Try K = 2, where the model will check the closest two neighbors for each instance:
+```{r wine 16, include = FALSE, echo = TRUE}
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 2)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (603 + 1491) / 3249
+# Prediction rate is 0.6445
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3555 or 35.55%.
+```
+
+K = 2 KNN model produced a prediction rate of 64.45%. This is now the worst prediction rate that we have seen so far.  
+
+Try K = 5:
+```{r wine 17, include = FALSE, echo = TRUE}
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 5)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (557 + 1606) / 3249
+# Prediction rate is 0.6657
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3343 or 33.43%.
+```
+
+K = 5 produced a prediction rate of 66.57%. So far, the KNN model has had the worst overall prediction rate of our fitted models, regardless of what value of K we use. We will now fit a naive Bayes model.  
+
+## Naive Bayes Model
+We will now fit a naive Bayes model using the same predictors that we just used in the KNN model in the previous section above. 
+
+```{r wine 18, include = TRUE}
+set.seed(1)
+nb_wine = naiveBayes(quality ~ volatile_acidity + residual_sugar +
+                       free_sulfur_dioxide + total_sulfur_dioxide + sulphates +
+                       alcohol, wine_train)
+nb_wine
+nb_class = predict(nb_wine, wine_test)
+table(nb_class, wine_test$quality)
+accurate_pred = mean(nb_class == wine_test$quality)
+# Prediction accuracy is 70.33%
+# Prediction error rate is:
+1 - accurate_pred
+# 29.67%
+```
+
+Our naive Bayes model produced a prediction rate of 70.33%. Now we will look at the poisson regression model.  
+
+## Poisson Regression
+Using the same predictors that we used in our KNN and naive Bayes models, we will fit a poisson regression model.
+
+```{r wine 19, include = TRUE}
+poiss_wine = glm(quality ~ volatile_acidity + residual_sugar +
+                   free_sulfur_dioxide + total_sulfur_dioxide + sulphates +
+                   alcohol, wine_train, family = poisson)
+summary(poiss_wine)
+# We can reject null hypothesis for all predictors.
+pred_probs = predict(poiss_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (698 + 1699) / (3249)
+# Accurate prediction percentage is 73.78%
+# Prediction error rate is:
+1 - accurate_pred
+# 26.22%.
+```
+
+Since the p-values of all of the predictors in our poisson regression model are less than 0.05, we can reject null hypothesis each of them and dictate them significant predictors. This model produced a prediction error rate of 73.78%. Let us know fit our data to classification trees.  
+
+## Classification Trees
+For our classification trees that we will be creating, we need to re-read in our data. Instead of having our quality response variable be represented by either 0 for poor or 1 for good, we want to change our response variable to "good" and want our reponses variables to be either "Yes" or "No". We will also convert our training and test data set to have these response variables to keep continuity with our analysis so we can confidently compare prediction rates.
+
+```{r wine 20, include = FALSE, echo = TRUE}
+red_wine_df = read.csv("wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+
+attach(wine_df)
+good = factor(ifelse(quality <= 5, "No", "Yes"))
+wine_df = data.frame(wine_df, good)
+```
+
+```{r wine 20 a, include = TRUE}
+# New training and test data:
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+```
+
+Now that we have re-fined our data, we can now perform a classification tree. Let us perform a classification tree on the entire wine quality data set using all of the predictors.
+
+```{r wine 21, echo = FALSE}
+tree_wine = tree(good ~. - quality, wine_df)
+summary(tree_wine)
+# Terminal nodes: 5
+# Training error rate = 26.43%.
+
+# Plot tree
+plot(tree_wine)
+text(tree_wine, pretty = 0)
+# Most important indicator of quality is alcohol.
+# Shows up three times on tree.
+tree_wine
+```
+
+We see that our classification tree has 5 terminal nodes and a training error rate of 26.43%, which means there is a training prediction rate of 73.57%. We also see that alcohol is the most important predictor in our classification tree as it shows up three seperate times on our tree. Let us now fit our classification tree using the training data and test our predictions using our test data.
+
+```{r wine 22, include = TRUE}
+tree_wine = tree(good ~ . - quality, wine_train)
+pred_tree = predict(tree_wine, wine_test, type = "class")
+table(pred_tree, wine_test$good)
+accurate_pred = (794 + 1565) / (3249)
+# Accurate prediction rate is 72.61%
+# Prediction error rate is:
+1 - accurate_pred
+# 27.39%.
+```
+This classification tree produced a prediction rate of 72.61%. Now, let us prune our tree using cross-validation to see if that increases our prediction test rate.  
+
+```{r wine 23, include = TRUE}
+set.seed(1)
+cv_wine = cv.tree(tree_wine, FUN = prune.misclass)
+names(cv_wine)
+cv_wine
+# Apply prune.misslcass function in order to purne tree to obtain 3 node tree
+prune_wine = prune.misclass(tree_wine, best = 3)
+plot(prune_wine)
+text(prune_wine, pretty = 0)
+# Test pruned tree performance on test data set.
+pred_tree = predict(prune_wine, wine_test, type = "class")
+table(pred_tree, wine_test$good)
+accurate_pred = (794 + 1565) / (3249)
+```
+
+```{r wine 24, echo = FALSE}
+par(mfrow = c(1,2))
+plot(cv_wine$size, cv_wine$dev, type = "b")
+plot(cv_wine$k, cv_wine$dev, type = "b")
+```
+
+This pruned tree produced the same prediction rate of 72.61% as our first tree. Since this pruned tree only has 3 terminal nodes, we will use this tree over our first classification tree that had 5 terminal nodes, becuase it is easier to interpret. Now, let us look at the bagging model.  
+
+## Bagging Models
+We will now fit our model using the bagging approach using the randomForest class in R.
+
+```{r wine 25, include = TRUE}
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11,
+                        importance = TRUE)
+bag_wine
+# 500 trees considering all 11 predictors 
+# Out-of-bag estimate of error rate is: 19.98
+# Accuracy rate is:
+1 - 0.1998
+# 80 %. Highest prediction rate so far. But this is only on training set.
+# Try on test set
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (824 + 1788) / (3249)
+# 80.39% accurate prediction rate.
+
+varImpPlot(bag_wine)
+```
+
+The bagging model produced a prediction rate of 80.39%, which is the highest prediction rate that we have seen thus far! As we move forward with our models, we will see if we can get any higher than 80.39%.
+
+Now, let us fit our bagging model with 100 trees:
+
+```{r wine 26, include = TRUE}
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11, ntree = 100,
+                        importance = TRUE)
+bag_wine
+# Slightly larger OOB estimate of error rate:
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (826 + 1783) / (3249)
+# 80.30% prediction rate
+
+varImpPlot(bag_wine)
+```
+
+This bagging model with 100 trees produced a prediction rate of 80.3%. Very close to our bagginf model with 500 trees.  
+
+Now, let us fit our bagging model with 25 trees:
+
+```{r wine 27, include = TRUE}
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11, ntree = 25,
+                        importance = TRUE)
+bag_wine
+# Slightly larger OOB estimate of error rate:
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (808 + 1744) / (3249)
+# 79.47% prediction rate
+
+
+# See most important variables
+varImpPlot(bag_wine)
+```
+
+This model produced a 79.47% prediction rate. Very close to our bagging approach with 500 and 100 trees. Now, let us fit various random forest models to see if we increase that prediction rate percentage.  
+
+## Random Forest Models
+We will now fit a random forest model, which is very similar to our bagging model, but we will use smaller predictor values compared to using all 11 predictors. We will first try with 5 variables.
+
+```{r wine 28, include = TRUE}
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5,
+                        importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 19.83%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (823 + 1792) / (3249)
+accurate_pred
+# Prediction rate: 80.49%
+
+
+# See most important variables
+varImpPlot(rf_wine)
+```
+
+This random forest model produced a prediction rate of 80.49%. Now let us try with 5 predictors and 100 trees.  
+
+```{r wine 29, include = TRUE}
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 20.26%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (837 + 1796) / (3249)
+accurate_pred
+
+# See most important variables
+varImpPlot(rf_wine)
+```
+
+This random forest model produced a prediction rate of 81.04%. This has now become our highest prediction rate so far! Alcohol and volatile_acidity seem to be the two most important predictors in this model. After a few more attempts of changing the number of trees and number of variables used in the model, we were not able to produce a higher prediction rate than the 81.04%. Now we will fit a boosted model.  
+
+## Boosting Model
+In order to fit a boosted model, we will need to re-read in our data again and change the quality response variable back to a bernoulli response variable where it takes on the value of 0 if the wine quality is poor (scores 3-6) and takes on the value of 1 if the wine quality is good (scores 7-9). We will also re-create our test data used in the previous regression models before we fit our classification trees.
+
+```{r wine 30, include = FALSE}
+red_wine_df = read.csv("wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+
+for (i in 1:length(wine_df$quality)) {
+  if (wine_df$quality[i] >= 3 & wine_df$quality[i] <= 5) {
+    wine_df$quality[i] = 0
+  } else if (wine_df$quality[i] >= 6 & wine_df$quality[i] <= 9) {
+    wine_df$quality[i] = 1
+  } else {
+    wine_df$quality[i] = NA  # Handle values outside the specified ranges
+  }
+}
+
+# Re-establish test and training data:
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+```
+
+When fitting a boosted model, our default shrinking parameter lambda will equal 0.001. We will also test out our boosted models using shrinking parameters: 0.01, 0.1, and 0.2 and will compare the prediction rates for each model.  
+
+```{r wine 31, include = TRUE}
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4)
+summary(boost_wine)
+# We see that alcohol, total_sulfur dioxide, and volatile_acidity
+# are most important variables in boosted model.
+plot(boost_wine, i = "alcohol")
+plot(boost_wine, i = "total_sulfur_dioxide")
+plot(boost_wine, i = "volatile_acidity")
+```
+
+In this model above, we see that the alcohol, total sulfur dioxide and volatile acidity are the most important variables when it comes to predicting the quality response variable. Now let us find the test prediction percentage.
+
+```{r wine 32, include = TRUE}
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (828 + 1733) / (3249)
+accurate_pred
+```
+
+This model produced a prediction rate of 78.82%. Now let us try with the shrinking parameter lambda equal to 0.01
+
+```{r wine 33, include = TRUE}
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4, shrinkage = 0.01,
+                 verbose = FALSE)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (791 + 1761) / (3249)
+accurate_pred
+```
+
+This model produced a prediction rate of 78.54%. Let us try with the 0.1 shrinking parameter.
+
+```{r wine 34, include = TRUE}
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4, shrinkage = 0.1,
+                 verbose = FALSE)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (828 + 1733) / (3249)
+accurate_pred
+```
+
+This model produced a prediction rate of 78.82% which is the same prediction rate as the boosted model with the 0.001 shrinking parameter. Let us now try with the 0.2 shrinking parameter.
+
+```{r wine 35, include = TRUE}
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4, shrinkage = 0.2,
+                 verbose = FALSE)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (812 + 1732) / (3249)
+accurate_pred
+```
+
+This model produced a prediction rate of 78.30%. The boosted model with the highest prediction rate occured when we used shrinking paramater value of 0.001 and 0.1. The prediction rate for both of those models was 78.82%. Now we will turn our analysis to our last model that we will fit, which is our Bayesian Additive Regression Tree (BART).
+
+## Bayesian Additive Regression Tree (BART)
+In order to fit our BART model, we will need to create a set of both training and test matrices using our training and test data from our original wine data.
+
+```{r wine 36, include = FALSE}
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+x = wine_df[, 1:11]
+y = wine_df[, "quality"]
+
+xtrain = x[train,]
+ytrain = y[train]
+
+xtest = x[-train,]
+ytest = y[-train]
+
+bart_wine = lbart(xtrain, ytrain, x.test = xtest)
+bart_wine = lbart(xtrain, ytrain)
+```
+
+Once our training and testing data matrices are created, we can fit our BART model using the training data and test its predictions on the test data.
+
+```{r wine 37, include = TRUE}
+pred_bart = predict(bart_wine, newdata =  xtest)
+# Use $prob.test.mean extraction that represents the mean probs across
+## iterations or trees for each observation in test set
+pred_classes = ifelse(pred_bart$prob.test.mean > 0.5, 1, 0)
+table(pred_classes, ytest)
+accurate_pred = (754 + 1732) / 3249
+accurate_pred
+```
+
+This BART model produced a prediction rate of 76.52%. Now we can look at all of the models that we fit and see which one produced the highest prediction rate to help us determine which model we will choose that best fits our data of predicting wine quality as either poor or good.
+
+## Prediction Rate Summary
+Let us look at each prediction rate based on what model we fit using our qualitative regression methods from each section above.  
+
+Logistic regression with log transformations on predictors used: 74.96%. 
+Linear Discrimination Analysis (LDA): 73.56%. 
+Quadratic Descriptive Analysis (QDA): 72.91%.
+K-Nearest Neighbors Model: 69.95% when K = 1.  
+Pruned classification tree with 3 terminal nodes: 72.61%.  
+Bagging Model: 80.39%.  
+Random forest using 5 most important variables: 81.04%.  
+Boosting Model: 78.82% when shrinking parameter is either 0.001 or 0.1.  
+BART Model: 76.52%.  
+
+As we can see, the model that produced the highest prediction rate of 81.04% was our random forest using the 5 most important variables in our model and 100 trees. This means that our fitted model has a prediction error rate of 18.96% and the five predictors used were alcohol, volatile acidity, free sulfur dioxide, total sulfur dioxide and residual sugar.
+
+```{r wine 38, echo = FALSE}
+red_wine_df = read.csv("wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+
+
+attach(wine_df)
+good = factor(ifelse(quality <= 5, "No", "Yes"))
+wine_df = data.frame(wine_df, good)
+# New training and test data:
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 20.26%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (837 + 1796) / (3249)
+accurate_pred
+
+# See most important variables
+varImpPlot(rf_wine)
+```
+
+## Conclusion
+Compared to our quantitative regression analysis, the prediction rate percentages varied slightly more in our qualitative regression analysis. than what we saw in our condition based maintenance regression from our first portion of our project. We saw some prediction rate percentages range from approximately 72% to approximately 81%. This may not seem like a big difference between the models and for the most part, we would be happy with a prediction rate of 72% as that is better than flipping a coin and havina 50% chance have predicting whether the wine quality will be poor or good.  
+Our final random forest model that we chose to model and predict our data outperformed random guessing by about 31%, with a prediction rate of approximately 81%. Any one of these models would be a better model to use than using random guessing when it comes to predicting the quality of these wines. This shows that the qualitative regression models that we fit all have statistical significance when it comes to predicting our response variable. And that was our goal, to fit qualitative regression models, to predict and test our predictions to see how well we can predict the wine quality of our wine samples in northern Portugal. If we were to further this analysis using the model we fit using the data from 2009, we would try and obtain a new data set of all new wine qualities and put our model to the test to see how well we could predict wine quality without training our model on the new data.  
+
+# Project Conclusion
+In this research project, we were able to show how we can use both quantitative and qualitative regression models to model data and accurately predict our response variables. Using the various classes, functions, and models in Rstudio, we were able to fit a square root transformed linear regression model in our quantitative regression problem that had a mean squared test error rate of 0.000000969 when it came to predicting our gas turbine decay state coefficient. We were also able to fit a random forest model in our qualitative regression that was able to accurately predict our wine quality response variable as either poor or good 81.04% of the time. Rather than assuming that certain predictors are important when it comes to modeling data, we were able to use statistics and test predictions to measure how accurate our fitted models truly were.  
+
+# Appendix
+Coraddu,Andrea, Oneto,Luca, Ghio,Alessandro, Savio,Stefano, Anguita,Davide, and Figari,Massimo. (2014). Condition Based Maintenance of Naval Propulsion Plants. UCI Machine Learning Repository. https://doi.org/10.24432/C5K31K.  
+
+Cortez,Paulo, Cerdeira,A., Almeida,F., Matos,T., and Reis,J.. (2009). Wine Quality. UCI Machine Learning Repository. https://doi.org/10.24432/C56S3T.  
+
+Code Used for Quantitative Analysis
+
+```{r CBM 48, eval = FALSE}
+# Quantitative Linear Regression Final Project R Code -------------------------
+
+# Data link: https://archive.ics.uci.edu/dataset/316/condition+based+maintenance+of+naval+propulsion+plants
+
+# Citation:
+# Coraddu,Andrea, Oneto,Luca, Ghio,Alessandro, Savio,Stefano, Anguita,Davide, and Figari,Massimo. (2014). 
+# Condition Based Maintenance of Naval Propulsion Plants. UCI Machine Learning Repository.
+# https://doi.org/10.24432/C5K31K.
+
+# Use predictors to predict Gas Turbine (TB) decay state coefficient.
+
+# Read in and clean up data -----------------------------------------------
+cbm_df = read.table("Final_Project/uci_bm_dataset/data.txt", header = FALSE, colClasses = "numeric")
+colnames(cbm_df) = tolower(colnames(cbm_df))
+dim(cbm_df)
+# 11934 observations
+# 18 variables
+
+# Variables names:
+# v1 - Lever position (lp) [ ]
+# v2 - Ship speed (v) [knots]
+# v3 - Gas Turbine shaft torque (GTT) [kN m]
+# v4 - Gas Turbine rate of revolutions (GTn) [rpm]
+# v5 - Gas Generator rate of revolutions (GGn) [rpm]
+# v6 - Starboard Propeller Torque (Ts) [kN]
+# v7 - Port Propeller Torque (Tp) [kN]
+# v8 - HP Turbine exit temperature (T48) [C]
+# v9 - GT Compressor inlet air temperature (T1) [C]
+# 10 - GT Compressor outlet air temperature (T2) [C]
+# 11 - HP Turbine exit pressure (P48) [bar]
+# 12 - GT Compressor inlet air pressure (P1) [bar]
+# 13 - GT Compressor outlet air pressure (P2) [bar]
+# 14 - Gas Turbine exhaust gas pressure (Pexh) [bar]
+# 15 - Turbine Injecton Control (TIC) [%]
+# 16 - Fuel flow (mf) [kg/s]
+# 17 - GT Compressor decay state coefficient.
+# 18 - GT Turbine decay state coefficient. 
+
+
+names(cbm_df)
+# V18 is our response variable
+# V17 is also a response variable so we want to remove that column and just focus
+## on V18.
+cbm_df = cbm_df[, -which(names(cbm_df) == "v17")]
+names(cbm_df)
+dim(cbm_df)
+# 11934 observations
+# 17 variables. 16 predictors. 1 response.
+
+table(cbm_df$v17)
+# 459 occurrences of each response output in data set. 26 different responses
+# for V18.
+
+# Response Variable Summary -----------------------------------------------
+# Using 16 predictors to predict Gas Turbine (TB) decay state coefficient extracted
+# from experiments that have been carried out by means of a numerical simulator of 
+# a naval vessel (Frigate) characterized by a Gas Turbine (GT) propulsion plant.
+# Use training data and fit model that accurately predicts test data.
+
+# Linear Regression -------------------------------------------------------
+cbm_lm = lm(v18 ~., cbm_df)
+summary(cbm_lm)
+# v7, v9 and v12 are showing as NA coefficients. 
+# This indicates muilticollinearity or perfect collinearity, meaning that one or 
+## more predictors are linearly dependent on others. 
+# Check for columns with near-zero or zero variance
+near_zero_var = colSums(var(cbm_df)) < 1e-10
+# Display columns with near-zero or zero variance
+print(names(cbm_df)[near_zero_var])
+# v9 and v12 were returned. Yet v7 also showing NA
+cbm_df$v9
+# All observations in v9 are the same at 288.
+cbm_df$v12
+# Same with v12 where all the same at 0.998.
+
+# Let's remove v9 and v12.
+cbm_df = cbm_df[, -which(names(cbm_df) == "v9")]
+cbm_df = cbm_df[, -which(names(cbm_df) == "v12")]
+# For v7, lets look at correlation matrix
+cor(cbm_df)
+install.packages("knitr")
+install.packages("corrplot") 
+library(knitr)
+library(corrplot)
+correlation_matrix = cor(cbm_df, use = "pairwise.complete.obs")
+# v6 and v7 are perfectly correlated. 
+are_same = all(cbm_df$v6 == cbm_df$v7)
+if (are_same) {
+  print("v6 and v7 are exactly the same.")
+} else {
+  print("v6 and v7 are different.")
+}
+# v6 = Starboard Propeller Torque (Ts) [kN] and v7 = Port Propeller Torque (Tp) [kN]
+## These are the same values, so let's remove v7.
+cbm_df = cbm_df[, -which(names(cbm_df) == "v7")]
+
+# Training and Test Data --------------------------------------------------
+# Here is training and test data that we will use. There is 11934 observations.
+# Split data in half for training and test data.
+11934 / 2
+set.seed(1)
+train = sample(1:nrow(cbm_df), 5967)
+cbm_train = cbm_df[train,]
+cbm_test = cbm_df[-train,]
+
+# Linear Regression Cont. -------------------------------------------------
+
+# Let's try best subset selection on entire data:
+library(leaps)
+best_cbm = regsubsets(v18 ~., cbm_df, nvmax = 13)
+best_cbm_summary = summary(best_cbm)
+names(best_cbm_summary)
+# This returns R^2, RSS, adjusted R^2, Cp and BIC.
+best_cbm_summary$rsq
+# Plot RSS, adjusted R^2, Cp and BIC
+par(mfrow = c(2, 2))
+plot(best_cbm_summary$rss, xlab = "Number of Variables",
+     ylab = "RSS", type = "l")
+plot(best_cbm_summary$adjr2, xlab = "Number of Variables",
+     ylab = "Adjusted RSq", type = "l")
+# Plot red dot to indicate model with largest adjusted R^2
+which.max(best_cbm_summary$adjr2)
+# Returned 12
+points(12, best_cbm_summary$adjr2[12], col = "red", cex = 2, pch = 20)
+# Plot Cp and BIC stats and indicate models with smallest stat
+plot(best_cbm_summary$cp, xlab = "Number of Variables", ylab = "Cp", type = "l")
+which.min(best_cbm_summary$cp)
+# Returns 12
+points(12, best_cbm_summary$cp[12], col = "red", cex = 2,
+       pch = 20)
+which.min(best_cbm_summary$bic)
+# Returns 12
+plot(best_cbm_summary$bic, xlab = "Number of Variables",
+     ylab = "BIC", type = "l")
+points(12, best_cbm_summary$bic[12], col = "red", cex = 2,
+       pch = 20)
+# Best subset selection says to have 12 variables.
+
+# Use forward selection:
+fwd_cbm = regsubsets(v18 ~., cbm_df, nvmax = 13, method = "forward")
+summary(fwd_cbm)
+# Best 12 predictor model removes v1
+
+# Use backward selection:
+bwd_cbm = regsubsets(v18 ~., cbm_df, nvmax = 13, method = "backward")
+summary(bwd_cbm)
+# Best 12 predictor model only removes v1
+# Since v1 was not included in both the forward and backward selection models, 
+# I will keep that variable in mind as the first one removed in the models moving 
+# forward. My approach for the multiple linear regression will combine both forward 
+# and backward selection by using training data on test data while examining p-values 
+# and absolute values of t to add and remove variables from models. My goal is to 
+# try and make the model as simple as possible by maximizing the R^2 value and 
+# minimizing the test mean squared error.
+
+# Only 14 variables.
+cbm_lm = lm(v18 ~., cbm_df)
+summary(cbm_lm)
+# All p-values are less than 0.05, so we can reject the null hypothesis and 
+## say all values are statistically signicant.
+# R-squared value is 91.1%
+# v1 barely passes hyothesis test.
+# Try model without v1
+cbm_lm = lm(v18 ~. -v1, cbm_df)
+summary(cbm_lm)
+# All p-values are less than 0.05 once again.
+# R-squared value still 91.1%
+# Looking at coefficients, we see some ones with negative coefficients:
+## v6, v8, v13, and v15
+# Try running model with just positive coefficients
+cbm_lm = lm(v18 ~. - v1 - v6 - v8 - v13 - v15, cbm_df)
+summary(cbm_lm)
+# This makes model way worse.
+# Go back to model with all but v1 variable
+cbm_lm = lm(v18 ~. -v1, cbm_df)
+summary(cbm_lm)
+
+# Let's try letting our train data predict our test model 
+train_cbm_lm = lm(v18 ~. - v1, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# Means squared error is almost close to 0.
+# This means that this model did a really good job at predicting response variable
+## in test data.
+
+# Can we lose some predictors on training data to make data more interpretable?
+# Let's then remove each predictor, one at a time, if there p-values are less than
+## 0.05 or if all p-values are less than, 0.05, remove predictor with smallest
+### absolute t-value.
+
+# Remove v1 from like we did in previous model.
+train_cbm_lm = lm(v18 ~. - v1, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values pass hypothesis test.
+# Test MSE is close to zero.
+# R^2 is 91.25%
+# Let's remove predictor with lowest absolute t-value which is v14
+
+# Remove v14
+train_cbm_lm = lm(v18 ~. - v1 - v14, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values besides pass hypothesis test.
+# Test MSE is still close to 0.
+# R^2 is 91.1%
+# Let's remove predictor with lowest absolute t-value which is v10.
+
+# Remove v10
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# MSE still close to 0.
+# R-squared is 90.81%%
+# Let's remove predictor with lowest absolute t-value which is v11
+
+# Remove v11
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10 - v11, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# MSE still close to 0.
+# R-squared is 89.93%%
+# Let's remove predictor with lowest absolute t-value which is v15
+
+# Remove v15
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10 - v11 - v15, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# MSE still close to 0.
+# R-squared is 88.43%%
+# Let's remove predictor with lowest absolute t-value which is v16
+
+# Remove v16
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10 - v11 - v15 - v16, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# MSE still close to 0.
+# R-squared is 76.48%%
+# R-squared value dropped dramatically. 
+# I want to keep that value above 90%.
+
+# So let's go back to most recent model that was above 90% for R-squared value:
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_train)
+summary(train_cbm_lm)
+# All predictors p-values are less than 0.05
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# MSE still close to 0.
+# R-squared is 90.81%%
+# 10 predictors in this model. 2 less predictors than previous model that just 
+## dropped v1 predictor.
+
+
+# Create a scatter plot comparing actual vs. predicted values
+par(mfrow = c(1, 1))
+plot_df = data.frame(Actual = cbm_test$v18, Predicted = pred_cbm_lm)
+
+ggplot(plot_df, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +  # Adds a line of perfect prediction
+  labs(x = "Actual Gas Turbine Decay State Coefficient", 
+       y = "Predicted Gast Turbine Decay State Coefficient", 
+       title = "Actual vs. Predicted") +
+  theme_minimal()
+
+# Plot this model on entire data set:
+library(ggplot2)
+cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_df)
+par(mfrow = c(2, 2))
+plot(cbm_lm)
+
+# Try some transformations of predictors on model we have
+train_cbm_lm = lm(v18 ~. - v1 - v14 - v10, cbm_train)
+summary(train_cbm_lm)
+# Same as this model:
+train_cbm_lm = lm(v18 ~ v2 + v3 + v4 + v5 + v6 + v8 + v11 +
+                    v13 + v15 + v16, cbm_train)
+summary(train_cbm_lm)
+
+# Try sqrt():
+train_cbm_lm = lm(v18 ~ sqrt(v2) + sqrt(v3) + sqrt(v4) + sqrt(v5) + sqrt(v6) +
+                  sqrt(v8) + sqrt(v11) + sqrt(v13) + v15 + sqrt(v16), cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05 besides v15.
+# Test MSE still close to 0.
+# R-squared is 93.21%%
+# Try model without square ro0ting v15.
+# p-value still greater than 0.05.
+# Remove v15 predictor
+train_cbm_lm = lm(v18 ~ sqrt(v2) + sqrt(v3) + sqrt(v4) + sqrt(v5) + sqrt(v6) +
+                    sqrt(v8) + sqrt(v11) + sqrt(v13)  + sqrt(v16), cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# Test MSE still close to 0.
+# R-squared is 93.21%%
+
+# Try squared:
+train_cbm_lm = lm(v18 ~ I(v2)^2 + I(v3)^2 + I(v4)^2 + I(v5)^2 + I(v6)^2 +
+                    I(v8)^2 + I(v11)^2 + I(v13)^2 + I(v15)^2 + I(v16)^2, cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# Test MSE still close to 0.
+# R-squared is 90.81%%
+
+# Try cubed:
+train_cbm_lm = lm(v18 ~ I(v2)^3 + I(v3)^3 + I(v4)^3 + I(v5)^3 + I(v6)^3 +
+                    I(v8)^3 + I(v11)^3 + I(v13)^3 + I(v15)^3 + I(v16)^3, cbm_train)
+summary(train_cbm_lm)
+pred_cbm_lm = predict(train_cbm_lm, newdata = cbm_test)
+mean((pred_cbm_lm - cbm_test$v18)^2)
+# All p-values less than 0.05.
+# Test MSE still close to 0.
+# R-squared is 90.81%%
+
+# Sqrt() transformation is highest R-squared value so far with test MSE being
+## 0.
+
+# Try interactions of sqrt() model
+# Look at most correlated variables using these predictors:
+cor(cbm_df)
+best_train_cbm_lm = lm(v18 ~ sqrt(v2)*sqrt(v5) + sqrt(v4)*sqrt(v11) + sqrt(v3)*sqrt(v6) +
+                    sqrt(v8)*sqrt(v13) + sqrt(v16), cbm_train)
+summary(best_train_cbm_lm)
+best_pred_cbm_lm = predict(best_train_cbm_lm, newdata = cbm_test)
+mean((best_pred_cbm_lm - cbm_test$v18)^2)
+# This raised R-squared to 94.82%
+# Tried other variations. This was the best R-squared value that I got.
+# Test MSE = 0.00000295
+
+# Plot this model:
+par(mfrow = c(1, 1))
+plot_df_1 = data.frame(Actual = cbm_test$v18, Predicted = pred_cbm_lm)
+
+ggplot(plot_df, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +  # Adds a line of perfect prediction
+  labs(x = "Actual Gas Turbine Decay State Coefficient", 
+       y = "Predicted Gast Turbine Decay State Coefficient", 
+       title = "Actual vs. Predicted") +
+  theme_minimal()
+
+# Ridge Regression Model --------------------------------------------------
+library(glmnet)
+# Perform ridge regression on data
+set.seed(1)
+train_matrix = model.matrix(v18~., cbm_train)
+test_matrix = model.matrix(v18~., cbm_test)
+# Now we need to select lambda using cross-validation
+cv_out = cv.glmnet(train_matrix, cbm_train$v18, alpha = 0)
+best_lam = cv_out$lambda.min
+best_lam
+# Lambda chosen by cross-validation is 0.00004
+# Now we fit ridge regression model and make predictions:
+cbm_ridge = glmnet(train_matrix, cbm_train$v18, alpha = 0)
+pred_cbm_ridge = predict(cbm_ridge, s = best_lam, newx = test_matrix)
+# Find test error:
+mean((pred_cbm_ridge - cbm_test$v18)^2)
+# Test Error is very close to 0
+# Test error is 0.000048
+
+
+# Lasso Regression Model --------------------------------------------------
+# Perform lasso regression
+set.seed(1)
+# Select lambda using cross-validation
+cv_lam = cv.glmnet(train_matrix, cbm_train$v18, alpha = 1)
+best_lam = cv_lam$lambda.min
+best_lam
+# Lambda chosen by cross-validation is 0.00000505
+# Now we fit lasso regression model and make predictions:
+cbm_lasso = glmnet(train_matrix, cbm_train$v18, alpha = 1)
+pred_cbm_lasso = predict(cbm_lasso, s = best_lam, newx = test_matrix)
+# Find test error:
+mean((pred_cbm_lasso - cbm_test$v18)^2)
+# Test error is very close to 0
+# Test error is 0.0000095.
+# Ridge regression has lower test MSE.
+
+# Principal Components Regression -----------------------------------------
+# Perform principal components regression and try to reduce dimensions of data.
+library(pls)
+set.seed(1)
+cbm_pcr = pcr(v18~., data = cbm_train, 
+              scale = TRUE, validation = "CV")
+summary(cbm_pcr)
+validationplot(cbm_pcr, val.type = "MSEP")
+# Where M = 11, 12, and 13 have lowest MSEP values. But we want to try and reduce
+# dimensions.
+# Let's try where M = 10.
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 10)
+mean((pred_pcr - cbm_test$v18)^2)
+# Test MSE = 0.0000223
+
+# Try where M = 9
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 9)
+mean((pred_pcr - cbm_test$v18)^2)
+# Test MSE = 0.0000234
+
+# And try where M = 11
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 11)
+mean((pred_pcr - cbm_test$v18)^2)
+# Test MSE = 0.00000605
+# Even though we are trying to reduce dimensions. M = 11 provides the lowest
+## test error.
+
+# Partial Least Squares ---------------------------------------------------
+set.seed(1)
+cbm_pls = plsr(v18~., data = cbm_train, 
+               scale = TRUE, validation = "CV")
+summary(cbm_pls)
+validationplot(cbm_pls, val.type = "MSEP")
+# Lowest MSEP occurs when M = 12 but we are trying to reduce dimension
+# Try with M = 8
+pred_pls = predict(cbm_pls, cbm_test, ncomp = 8)
+mean((pred_pls - cbm_test$v18)^2)
+# Test MSE = 0.0000144
+
+# Try M = 9
+pred_pls = predict(cbm_pls, cbm_test, ncomp = 9)
+mean((pred_pls - cbm_test$v18)^2)
+# Test MSE = 0.0000113
+
+# Try M = 10
+pred_pls = predict(cbm_pls, cbm_test, ncomp = 10)
+mean((pred_pls - cbm_test$v18)^2)
+# Test MSE = 0.00000578
+# M = 10 provides lowest test MSE of Partial Least Squares
+# Lower than PCR with M = 11.
+
+# Regression Trees --------------------------------------------------------
+# Fit a regression tree on training data
+library(tree)
+cbm_tree = tree(v18 ~ ., cbm_train)
+summary(cbm_tree)
+plot(cbm_tree)
+text(cbm_tree, pretty = 0)
+# Number of terminal nodes: 21
+# Only variables used in tree: v3, v13, v5, v4, v14, v10 and v11
+# Find test MSE
+yhat = predict(cbm_tree, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+# Test MSE = 0.0000191
+cbm_tree
+
+# Pruning Regression Trees
+# Use cv.tree() function to prune tree to help make it more interpretable.
+cv_tree_cbm = cv.tree(cbm_tree)
+plot(cv_tree_cbm$size, cv_tree_cbm$dev, type = "b")
+# Try with 15 terminal nodes instead of 21
+cbm_prune = prune.tree(cbm_tree, best = 15)
+plot(cbm_prune)
+text(cbm_prune, pretty = 0)
+summary(cbm_prune)
+# Find test MSE on pruned tree:
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+# Test MSE = 0.0000231
+# Close to test MSE of original tree and more interpretable.
+# Still not very easy to interpret.
+
+# Try with 11 terminal nodes
+cbm_prune = prune.tree(cbm_tree, best = 11)
+plot(cbm_prune)
+text(cbm_prune, pretty = 0)
+summary(cbm_prune)
+# Find test MSE on pruned tree:
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+# Test MSE = 0.0000284
+# Similar test MSE. More interpretable tree.
+
+# Try with 9 terminal nodes
+cbm_prune = prune.tree(cbm_tree, best = 9)
+plot(cbm_prune)
+text(cbm_prune, pretty = 0)
+summary(cbm_prune)
+# Find test MSE on pruned tree:
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+# Test MSE = 0.0000284
+# Similar test MSE to tree with 11 terminal nodes
+
+# Try with 8 terminal nodes
+cbm_prune = prune.tree(cbm_tree, best = 8)
+plot(cbm_prune)
+text(cbm_prune, pretty = 0)
+summary(cbm_prune)
+# Find test MSE on pruned tree:
+yhat = predict(cbm_prune, newdata = cbm_test)
+mean((yhat - cbm_test[, "v18"])^2)
+# Test MSE = 0.0000363
+# Slightly higher test MSE to tree with 9 terminal nodes. More easy to read.
+
+# Pruned tree preferred as it has small test MSE and it is easier to understand compared
+## to tree with 21 terminal nodes.
+
+
+# Bagging and Random Forests ---------------------------------------------------
+# Perform bagging model and Random Forest. Find test MSE
+library(randomForest)
+set.seed(1)
+cbm_bag = randomForest(v18 ~., data = cbm_train, mtry = 13, importance = TRUE)
+cbm_bag
+yhat_bag = predict(cbm_bag, newdata = cbm_test)
+mean((yhat_bag - cbm_test$v18)^2)
+# Using 500 trees and trying all 13 predictors at each split, 98.45%
+## of variance explained. 
+# Test MSE = 0.000000858
+# Lowest test MSE so far.
+
+# Try with number of trees as 25 to simplify model
+set.seed(1)
+cbm_rf = randomForest(v18 ~., data = cbm_train, ntree = 25,
+                       mtry = 13, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+# Using 25 trees and trying all 13 predictors at each split, 97.96%
+## of variance explained. 
+# Test MSE = 0.000000969
+# Still very small MSE.
+
+# Try with 10 variables instead of 13 and 25 trees
+set.seed(1)
+cbm_rf = randomForest(v18 ~., data = cbm_train, ntree = 25,
+                       mtry = 10, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+# Using 25 trees and trying 10 predictors at each split, 97.86%
+## of variance explained. 
+# Test MSE = 0.00000103
+# Still very small MSE and variance barely dropped.
+
+# Try with 10 variables instead of 13 and 10 trees
+set.seed(1)
+cbm_bag = randomForest(v18 ~., data = cbm_train, ntree = 10,
+                       mtry = 10, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+# Using 10 trees and trying 10 predictors at each split, 96.97%
+## of variance explained. 
+# Test MSE = 0.00000112
+# Still very small MSE and variance barely dropped.
+
+# Try with 8 variables and 5 trees
+set.seed(1)
+cbm_rf = randomForest(v18 ~., data = cbm_train, ntree = 5,
+                       mtry = 8, importance = TRUE)
+cbm_rf
+yhat_rf = predict(cbm_rf, newdata = cbm_test)
+mean((yhat_rf - cbm_test$v18)^2)
+# Using 5 trees and trying 8 predictors at each split, 95.53%
+## of variance explained. 
+# Test MSE = 0.00000148
+# Still very small MSE and variance barely dropped.
+# As you bring M down, and cut down on tree sizes, Test MSE barely affected
+## and variance explained by model does not change drastically.
+
+
+# Boosting ----------------------------------------------------------------
+# Use gbm() library
+library(gbm)
+# lambda = 0.001:
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                      n.trees = 1000)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                       n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+# Test MSE = 0.0000179
+
+# lamda = 0.01
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.01)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                     n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+# Test MSE = 0.0000448
+# Lambda = 0.001 produced smaller test MSE
+
+# lambda = 0.1
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.1)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                     n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+# Test MSE = 0.0000179
+# Lambda = 0.001 produced same test MSE as using lambda = 0.001
+
+# lambda = 0.2
+set.seed(1)
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.2)
+yhat_boost = predict(cbm_boost, newdata = cbm_test, 
+                     n.trees = 1000)
+mean((yhat_boost - cbm_test$v18)^2)
+# Test MSE = 0.00001
+# Lambda = 0.2 produced smallest test MSE of all boosted models.
+
+
+# Bayesian Additive Regression Trees (BART) -------------------------------
+# Reread in data for BART model
+cbm_df = read.table("Final_Project/uci_bm_dataset/data.txt", header = FALSE, colClasses = "numeric")
+colnames(cbm_df) = tolower(colnames(cbm_df))
+cbm_df = cbm_df[, -which(names(cbm_df) == "v9")]
+cbm_df = cbm_df[, -which(names(cbm_df) == "v12")]
+cbm_df = cbm_df[, -which(names(cbm_df) == "v7")]
+
+# Training data for BART
+set.seed(1)
+train = sample(1:nrow(cbm_df), 5967)
+
+# Perform BART
+library(BART)
+
+x1 = cbm_df[, 1:13]
+y1 = cbm_df[,"v18"]
+
+xtrain1 = x1[train,]
+ytrain1 = y1[train]
+
+xtest1 = x1[-train,]
+ytest1 = y1[-train]
+set.seed(1)
+cbm_bart = gbart(xtrain1, ytrain1, x.test = xtest1)
+# Now compute test MSE
+yhat_bart = cbm_bart$yhat.test.mean 
+mean((ytest1 - yhat_bart)^2)
+# Test MSE is 0.00000414
+
+# Test MSE by Model -------------------------------------------------------
+# Liner Model:
+cor(cbm_df)
+best_cbm_lm = lm(v18 ~ sqrt(v2)*sqrt(v5) + sqrt(v4)*sqrt(v11) + sqrt(v3)*sqrt(v6) +
+                         sqrt(v8)*sqrt(v13) + sqrt(v16), cbm_train)
+summary(best_cbm_lm)
+best_pred_cbm_lm = predict(best_train_cbm_lm, newdata = cbm_test)
+mean((best_pred_cbm_lm - cbm_test$v18)^2)
+# This raised R-squared to 94.82%
+# Tried other variations. This was the best R-squared value that I got.
+# Test MSE = 0.00000295
+
+# Ridge Regression Model
+# Test MSE = 0.000048
+
+# Lasso Regression Model
+# Test MSE = 0.0000095
+
+# Principal Component Regression Model
+pred_pcr = predict(cbm_pcr, cbm_test, ncomp = 11)
+mean((pred_pcr - cbm_test$v18)^2)
+# Test MSE = 0.00000605
+
+# Partial Least Squares Model
+pred_pls = predict(cbm_pls, cbm_test, ncomp = 10)
+mean((pred_pls - cbm_test$v18)^2)
+# Test MSE = 0.00000578
+
+# Regression Tree
+cbm_tree = tree(v18 ~ ., cbm_train)
+# Test MSE = 0.0000191
+
+# Bagging
+cbm_bag = randomForest(v18 ~., data = cbm_train, mtry = 13, importance = TRUE)
+# Using 500 trees and trying all 13 predictors at each split, 98.45% of variance explained. 
+# Test MSE = 0.000000858
+
+# Random Forest
+cbm_rf = randomForest(v18 ~., data = cbm_train, ntree = 25,
+                      mtry = 13, importance = TRUE)
+# Test MSE = 0.000000969.
+
+# Boosting
+cbm_boost = gbm(v18 ~., data = cbm_train, distribution = "gaussian",
+                n.trees = 1000, shrinkage = 0.2)
+# Test MSE = 0.00001
+
+
+# BART Model
+cbm_bart = gbart(xtrain1, ytrain1, x.test = xtest1)
+# Test MSE = 0.00000414
+
+# Best Model:
+# Bagging using all 13 predictors at each split provided best Test MSE and explained
+## 98.45% of the variance in the data set. 
+# On that conclusion, we will say that this model best fits our training data to 
+## predict our test data.
+```
+
+Code for Qualitative Analysis:
+
+```{r wine 39, eval = FALSE}
+# Qualitative Regression Final Project R code ----------------------------------
+
+# Data link: https://archive.ics.uci.edu/dataset/186/wine+quality
+
+# Citation:
+# Cortez,Paulo, Cerdeira,A., Almeida,F., Matos,T., and Reis,J.. (2009). Wine Quality. 
+# UCI Machine Learning Repository. https://doi.org/10.24432/C56S3T.
+
+# Use wine data to predict wine quality as bad and good.
+# Bad wine quality will be ranked from 3-5.
+# Good wine quality will be ranked from 6-9.
+
+# Read in and clean up data -----------------------------------------------
+red_wine_df = read.csv("Final_Project/wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("Final_Project/wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+dim(wine_df)
+# 6497 observations and 12 variables.
+
+# Response Variable Summary -----------------------------------------------
+# quality will be our response variable.
+# Can we use qualitative regression to find model to accurately predict quality response variable
+## using 11 other predictors? Let's find out.
+# First let's categorize the quality response variable into bad or good.
+# First range of quality:
+range(wine_df$quality)
+# 3 to 9.
+# Use for loop to categorize wine quality 3-5 as poor and 6-9 as good:
+# 0 will equal bad. 
+# 1 will equal good.
+for (i in 1:length(wine_df$quality)) {
+  if (wine_df$quality[i] >= 3 & wine_df$quality[i] <= 5) {
+    wine_df$quality[i] = 0
+  } else if (wine_df$quality[i] >= 6 & wine_df$quality[i] <= 9) {
+    wine_df$quality[i] = 1
+  } else {
+    wine_df$quality[i] = NA  # Handle values outside the specified ranges
+  }
+}
+# Count how many poors:
+sum(wine_df$quality == 0)
+# 2384
+# Count how many goods:
+sum(wine_df$quality == 1)
+# 4113
+
+#
+
+# Training and Test Data --------------------------------------------------
+# Here is training and test data that we will use. There is 6497 observations.
+# Split data in half for training and test data.
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+
+# Check correlated variables
+cor(wine_df[-12])
+
+# Logistic Regression -----------------------------------------------------
+glm_wine = glm(quality~., wine_df, family = binomial)
+summary(glm_wine)
+# Using null hypothesis where no predictor is significant, we see that that we can
+## reject the null hypothesis for the following predictors as their p-values are all
+### less than 0.05:
+# volatile_acidity
+# citric_acid
+# residual_sugar
+# free_sulfur_dioxide
+# total_sulfur_dioxide
+# ph
+# sulphates
+# alcohol
+
+# Three of the predictors have p-values greater than 0.05, so we fail to reject
+## the null hypothesis on those predictors. 
+# With that being said, we remove them:
+# fixed_acidity
+# chlorides
+# density
+glm_wine = glm(quality ~. - fixed_acidity - chlorides - density, 
+               wine_df, family = binomial)
+summary(glm_wine)
+# After creating this model, we fall to reject the null hypothesis for ph
+## variable. Remove that variable from the model:
+glm_wine = glm(quality ~. - fixed_acidity - chlorides - density - ph, 
+               wine_df, family = binomial)
+summary(glm_wine)
+# All variables p-values are less than 0.
+
+# Predict on the entire dataset using the logistic model
+pred_probs = predict(glm_wine, newdata = wine_df, type = "response")
+
+# Convert probabilities to binary predictions (0 or 1)
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+
+# Construct confusion matrix:
+conf_matrix = table(wine_df$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (1357 + 3464)/6497
+# Returns 0.7420
+# Results in prediction error of:
+1 - accurate_pred
+# 0.2579 or 25.8%
+
+# This data is definitely overfitted using just entire data set.
+# Let's use training and test data. Use training data to create model then
+## test data to test the model:
+glm_wine = glm(quality ~., wine_train, family = binomial)
+summary(glm_wine)
+# Looking at p-values, we will leave out following variables:
+# chlorides
+glm_wine = glm(quality~. - chlorides, wine_train, family = binomial)
+summary(glm_wine)
+# Remove predictors that are barely significant to see if that changes 
+## prediction rate to simplify model:
+# citric_acid
+# density
+# ph
+glm_wine = glm(quality~. - chlorides - citric_acid - 
+                 density - ph, wine_train, family = binomial)
+summary(glm_wine)
+# fixed_acidity no longer significant
+glm_wine = glm(quality~. - chlorides - citric_acid - 
+                 density - ph - fixed_acidity, wine_train, family = binomial)
+# Same as:
+glm_wine = glm(quality ~ volatile_acidity + residual_sugar +
+                 free_sulfur_dioxide + total_sulfur_dioxide + sulphates +
+                 alcohol, wine_train, family = binomial)
+summary(glm_wine)
+
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (671 + 1733) / 3249
+# Returns 0.73992
+1 - accurate_pred
+# Prediction error of 0.26 or 26%. Higher than prediction error rate on
+## over fitted data, but this one is less bias as we used training data and
+# tested it on test data.
+
+
+# Transformations and Interactions ----------------------------------------
+# Interaction terms:
+glm_wine = glm(quality ~ volatile_acidity + residual_sugar +
+                 free_sulfur_dioxide + total_sulfur_dioxide + sulphates*alcohol, 
+               wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (670 + 1733) / 3249
+# This produced similar prediction rate of 74%
+
+# After multiple tries at different interactions between different variables,
+## I could not produce a significantly better test prediction percentage.
+
+# Try sqrt:
+glm_wine = glm(quality ~ sqrt(volatile_acidity) + sqrt(residual_sugar) +
+                 sqrt(free_sulfur_dioxide) + sqrt(total_sulfur_dioxide) + 
+                 sqrt(sulphates) + sqrt(alcohol), wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (691 + 1733) / 3249
+# 74.6%. Highest prediction rate yet.
+
+# Try squared:
+glm_wine = glm(quality ~ I(volatile_acidity)^2 + I(residual_sugar)^2 +
+                 I(free_sulfur_dioxide)^2 + I(total_sulfur_dioxide)^2 + 
+                 I(sulphates)^2 + I(alcohol)^2, wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (671 + 1733) / 3249
+# 73.99%.
+
+# Try cubed:
+glm_wine = glm(quality ~ I(volatile_acidity)^3 + I(residual_sugar)^3 +
+                 I(free_sulfur_dioxide)^3 + I(total_sulfur_dioxide)^3 + 
+                 I(sulphates)^3 + I(alcohol)^3, wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (671 + 1733) / 3249
+# Sames as cubed. 73.99%
+
+# Try log transformation:
+glm_wine = glm(quality ~ log(volatile_acidity) + log(residual_sugar) +
+                 log(free_sulfur_dioxide) + log(total_sulfur_dioxide) + 
+                 log(sulphates) + log(alcohol), wine_train, family = binomial)
+summary(glm_wine)
+
+pred_probs = predict(glm_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (710 + 1725) / 3249
+# 74.96%. 
+
+# Linear Discrimination Analysis ------------------------------------------
+# Use lda() function on training set and predict test data.
+library(MASS)
+lda_wine = lda(quality ~., wine_train)
+summary(lda_wine)
+lda_pred = predict(lda_wine, wine_test)
+lda_class = lda_pred$class
+table(lda_class, wine_test$quality)
+accurate_pred = mean(lda_class == wine_test$quality)
+# Prediction rate = 0.7371 or 73.56%
+# Prediction error rate of:
+1 - accurate_pred
+# 0.2629 or 26.29%
+# Same prediction error rate from logistic regression.
+
+# Using QDA ---------------------------------------------------------------
+qda_wine = qda(quality ~., wine_train)
+qda_wine
+
+qda_class = predict(qda_wine, wine_test)$class
+table(qda_class, wine_test$quality)
+accurate_pred = mean(qda_class == wine_test$quality)
+# Prediction rate of 0.7291 or 72.91%
+# Prediction error rate of:
+1 - accurate_pred
+# 0.2709 or 27.09%
+
+# Using KNN ---------------------------------------------------------------
+# K = 1
+library(class)
+# Predictor variables used in glm_wine
+predictor_vars = c('volatile_acidity', 'residual_sugar',
+                         'free_sulfur_dioxide', 'total_sulfur_dioxide',
+                         'sulphates', 'alcohol')
+
+# Extract predictor variables from wine_train
+train_data = wine_train[, predictor_vars]
+
+# Define the test data
+test_data = wine_test[, predictor_vars]
+
+# Perform KNN prediction
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 1)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (692 + 1581) / 3249
+# Prediction rate is 0.6995
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3004 or 34.04%.
+# Worst prediction error rate so far.
+
+# Try K = 2
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 2)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (603 + 1491) / 3249
+# Prediction rate is 0.6445
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3555 or 35.55%.
+
+# Try K = 3
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 3)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (555 + 1560) / 3249
+# Prediction rate is 0.651
+# Prediction error rate is:
+1 - accurate_pred
+# 0.349 or 34.9%.
+
+# Try K = 4
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 4)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (548 + 1559) / 3249
+# Prediction rate is 0.6485
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3515 or 35.15%.
+# Not much better than K = 1
+
+# Try K = 5
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 5)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (557 + 1606) / 3249
+# Prediction rate is 0.6657
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3343 or 33.43%.
+# Not much better than K = 1
+
+# Try K = 6
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 6)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (531 + 1600) / 3249
+# Prediction rate is 0.6559
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3441 or 34.41%.
+# Not much better than K = 1
+
+# Try K = 7
+set.seed(1)
+knn_wine = knn(train_data, test_data, wine_train$quality, k = 7)
+# Use confusion matrix to test predictions
+conf_matrix = table(wine_test$quality, knn_wine)
+print(conf_matrix)
+accurate_pred = (504 + 1687) / 3249
+# Prediction rate is 0.6743
+# Prediction error rate is:
+1 - accurate_pred
+# 0.3256 or 32.56%.
+# Not much better than K = 1 or K = 5
+
+# KNN has worst prediction rate of all models that we ran.
+
+# Naive Bayes -----------------------------------------------------
+library(e1071)
+set.seed(1)
+nb_wine = naiveBayes(quality ~ volatile_acidity + residual_sugar +
+                       free_sulfur_dioxide + total_sulfur_dioxide + sulphates +
+                       alcohol, wine_train)
+nb_wine
+nb_class = predict(nb_wine, wine_test)
+table(nb_class, wine_test$quality)
+accurate_pred = mean(nb_class == wine_test$quality)
+# Prediction accuracy is 70.33%
+# Prediction error rate is:
+1 - accurate_pred
+# 29.67%
+# Low. but not as low as logistic regression, QDA or LDA.
+
+# Poisson Regression ------------------------------------------------------
+poiss_wine = glm(quality ~ volatile_acidity + residual_sugar +
+                   free_sulfur_dioxide + total_sulfur_dioxide + sulphates +
+                   alcohol, wine_train, family = poisson)
+summary(poiss_wine)
+# We can reject null hypothesis for all predictors.
+pred_probs = predict(poiss_wine, newdata = wine_test, type = "response")
+pred_classes = ifelse(pred_probs > 0.5, 1, 0)
+conf_matrix = table(wine_test$quality, pred_classes)
+print(conf_matrix)
+accurate_pred = (698 + 1699) / (3249)
+# Accurate prediction percentage is 73.78%
+# Prediction error rate is:
+1 - accurate_pred
+# 26.22%.
+# Similar to prediction error rates for logistic regression, LDA and QDA.
+
+# Classification Tree -----------------------------------------------------
+red_wine_df = read.csv("Final_Project/wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("Final_Project/wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+
+library(tree)
+attach(wine_df)
+good = factor(ifelse(quality <= 5, "No", "Yes"))
+wine_df = data.frame(wine_df, good)
+# New training and test data:
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+
+tree_wine = tree(good ~. - quality, wine_df)
+summary(tree_wine)
+# Terminal nodes: 5
+# Training error rate = 26.43%.
+
+# Plot tree
+plot(tree_wine)
+text(tree_wine, pretty = 0)
+# Most important indicator of quality is alcohol.
+# Shows up three times on tree.
+tree_wine
+
+# To properly evaluate performance of classification tree, we must estimate test 
+## error:
+tree_wine = tree(good ~ . - quality, wine_train)
+pred_tree = predict(tree_wine, wine_test, type = "class")
+table(pred_tree, wine_test$good)
+accurate_pred = (794 + 1565) / (3249)
+# Accurate prediction rate is 72.61%
+# Prediction error rate is:
+1 - accurate_pred
+# 27.39%.
+
+# Pruning tree:
+# Now, let's prune the tree to see if that leads to improved results.
+set.seed(1)
+cv_wine = cv.tree(tree_wine, FUN = prune.misclass)
+names(cv_wine)
+cv_wine
+# dev corresponds to number of cv errors. Same cv errors at five and 3 node tree
+par(mfrow = c(1,2))
+plot(cv_wine$size, cv_wine$dev, type = "b")
+plot(cv_wine$k, cv_wine$dev, type = "b")
+# Apply prune.misslcass function in order to purne tree to obtain 3 node tree
+prune_wine = prune.misclass(tree_wine, best = 3)
+plot(prune_wine)
+text(prune_wine, pretty = 0)
+# Test pruned tree performance on test data set.
+pred_tree = predict(prune_wine, wine_test, type = "class")
+table(pred_tree, wine_test$good)
+accurate_pred = (794 + 1565) / (3249)
+# Same prediction rate an prediction error rate as 5 node tree.
+# Go with 3 node tree because it is more interpretable than 5 node tree.
+
+# Bagging Approach:
+library(randomForest)
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11,
+                        importance = TRUE)
+bag_wine
+# 500 trees considering all 11 predictors 
+# Out-of-bag estimate of error rate is: 19.98
+# Accuracy rate is:
+1 - 0.1998
+# 80 %. Highest prediction rate so far. But this is only on training set.
+# Try on test set
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (824 + 1788) / (3249)
+# 80.39% accurate prediction rate.
+# Highest so far!
+
+# Try with number of trees as 25 instead of 500 to simplify model:
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11, ntree = 25,
+                        importance = TRUE)
+bag_wine
+# Slightly larger OOB estimate of error rate:
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (808 + 1774) / (3249)
+# 79.47%. Not as high as bagging model with 500 Trees
+
+# Try 100 trees
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11, ntree = 100,
+                        importance = TRUE)
+bag_wine
+# Slightly larger OOB estimate of error rate:
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (826 + 1783) / (3249)
+# 80.30% 
+# About same as 500 trees, and much more simpler model with only 100 trees.
+
+# Try with 50 trees
+set.seed(1)
+bag_wine = randomForest(good ~. - quality, wine_train, mtry = 11, ntree = 50,
+                        importance = TRUE)
+bag_wine
+# Slightly larger OOB estimate of error rate:
+pred_bag = predict(bag_wine, wine_test, type = "class")
+table(pred_bag, wine_test$good)
+accurate_pred = (822 + 1761) / (3249)
+# 79.50%.
+# Slightly lower than model with 100 trees.
+# So far 100 tree bagging model has highest prediction rate.
+
+# Random Forests:
+# Same as bagging but we use smaller mtry argument
+# By default, random forest uses sqrt(p) when building a random forest of classification
+## trees.
+# Let's try mtry = 5
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5,
+                        importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 19.83%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (823 + 1792) / (3249)
+# Prediction rate: 80.49%
+# Slightly higher than bagging model with 100 trees
+
+# Try random forest with 100 trees and mtry = 5.
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 20.26%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (837 + 1796) / (3249)
+# 81.04%
+# Highest prediction rate so far!
+
+# Try same model as above with mtry = 4
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 4, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 20.14%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (827 + 1790) / (3249)
+# 80.55%.
+# Not as high when mtry = 5.
+
+# Try when mtry = 6
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 6, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 19.92%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (837 + 1778) / (3249)
+# 80.49%
+
+# Random forest model with m try = 5 and ntree = 100 has best prediction rate
+## on test data: 81.04%
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 20.26%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (837 + 1796) / (3249)
+# importance() function shows importance of each variable
+importance(rf_wine)
+# Plot these importance measures:
+varImpPlot(rf_wine)
+# alcohol and volatile_acidity seem to be most important predictors in this model.
+
+# Boosting: 
+# Call gbm library for boosting.
+# Reset data back to binary classification for quality variable:
+red_wine_df = read.csv("Final_Project/wine_quality/wine_quality_red.csv")
+white_wine_df = read.csv("Final_Project/wine_quality/wine_quality_white.csv")
+wine_df = rbind(red_wine_df, white_wine_df)
+# Change column names to snake case:
+colnames(wine_df) = gsub("\\.", "_", colnames(wine_df))
+lowercase_cols = tolower(colnames(wine_df))
+colnames(wine_df) = lowercase_cols
+
+for (i in 1:length(wine_df$quality)) {
+  if (wine_df$quality[i] >= 3 & wine_df$quality[i] <= 5) {
+    wine_df$quality[i] = 0
+  } else if (wine_df$quality[i] >= 6 & wine_df$quality[i] <= 9) {
+    wine_df$quality[i] = 1
+  } else {
+    wine_df$quality[i] = NA  # Handle values outside the specified ranges
+  }
+}
+# Re-establish test and training data:
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+wine_train = wine_df[train,]
+wine_test = wine_df[-train,]
+
+# Default lambda value in model is 0.001
+library(gbm)
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4)
+summary(boost_wine)
+# We see that alcohol, total_sulfur dioxide, and volatile_acidity
+# are most important variables in boosted model.
+plot(boost_wine, i = "alcohol")
+plot(boost_wine, i = "total_sulfur_dioxide")
+plot(boost_wine, i = "volatile_acidity")
+
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (828 + 1733) / (3249)
+acurate_pred
+# 78.82% prediction rate
+
+# Try with n.trees = 100. Same shinking parameter.
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 100, interaction.depth = 4)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 100, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (752 + 1745) / (3249)
+# 76.85%. Smaller than previous model.
+
+# Try with 5000 trees and shrinking parameter of 0.01
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4, shrinkage = 0.01,
+                 verbose = FALSE)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (791 + 1761) / (3249)
+# 78.54%
+
+# Shrinking parameter of 0.1
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4, shrinkage = 0.1,
+                 verbose = FALSE)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (828 + 1733) / (3249)
+# 78.82
+
+# Shrinking parameter of 0.2
+set.seed(1)
+boost_wine = gbm(quality ~., wine_train, distribution = "bernoulli",
+                 n.trees = 5000, interaction.depth = 4, shrinkage = 0.2,
+                 verbose = FALSE)
+# Use model to predict test data
+pred_boost = predict(boost_wine, wine_test, n.trees = 5000, type = "response")
+pred_classes = ifelse(pred_boost > 0.5, 1, 0)
+table(pred_classes, wine_test$quality)
+accurate_pred = (812 + 1732) / (3249)
+# 78.30
+
+# Boosting model with 5000 trees and shrinking parameter of 0.1 produced
+## best prediction rate.
+# Still not best prediction rate we have seen.
+
+# BART
+# Use BART library
+library(BART)
+# Create matrices of predictors
+xtrain = wine_df[wine_train,]
+ytrain = wine_train[, "quality"]
+
+xtest = wine_test[, 1:11]
+ytest = wine_test[, "quality"]
+
+# Create training model and test using test data
+set.seed(1)
+train = sample(1:nrow(wine_df), 3248)
+x = wine_df[, 1:11]
+y = wine_df[, "quality"]
+
+xtrain = x[train,]
+ytrain = y[train]
+
+xtest = x[-train,]
+ytest = y[-train]
+
+bart_wine = lbart(xtrain, ytrain, x.test = xtest)
+
+# Train and test model on test data:
+bart_wine = lbart(xtrain, ytrain)
+pred_bart = predict(bart_wine, newdata =  xtest)
+# Use $prob.test.mean extraction that represents the mean probs across
+## iterations or trees for each observation in test set
+pred_classes = ifelse(pred_bart$prob.test.mean > 0.5, 1, 0)
+table(pred_classes, ytest)
+accurate_pred = (754 + 1732) / 3249
+accurate_pred
+# Prediction rate of 76.52%
+
+# Model with Best Prediction Rate -----------------------------------------
+# Random forest model with 100 trees and mtry = 5.
+# 81.04% predictin rate on test data.
+set.seed(1)
+rf_wine = randomForest(good ~. - quality, wine_train, mtry = 5, ntree = 100,
+                       importance = TRUE)
+rf_wine
+# OOB Estimate of error rate: 20.26%
+pred_rf = predict(rf_wine, wine_test, type = "class")
+table(pred_rf, wine_test$good)
+accurate_pred = (837 + 1796) / (3249)
+```
