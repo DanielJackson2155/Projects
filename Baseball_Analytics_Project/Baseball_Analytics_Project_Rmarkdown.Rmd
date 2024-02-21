@@ -1,0 +1,847 @@
+---
+title: 'Baseball Analytics Project: Predicting Full Season On-Base Percentage'
+author: "Daniel Jackson"
+date: "February 22nd, 2024"
+output: pdf_document
+---
+
+# Libraries Used
+```{r Libraries Used, echo = TRUE, results = 'hide', message = FALSE}
+library(googlesheets4)
+library(corrplot)
+library(dplyr)
+library(glmnet)
+library(caret)
+library(pls)
+library(ggplot2)
+library(tree)
+library(ipred)
+library(randomForest)
+library(gbm)
+```
+
+
+# Introduction to Analysis
+Our goal of this analysis is to predict each player's full season on-base percentage (OBP) at the end of the 2019 Major League Baseball (MLB) regular season given the player's batting statistics in March and April of 2019. We will read in and clean up our data. After the data is cleaned up, we will fit various regression models using training data. We will then use those trained models to make predictions on our held-out test data that we created. We will then take the mean squared error rate of those predictions compared to the player's actual full season on-base percentage to see to see how accurate our predictions were. Let's start by reading in our data from a Google Sheet. The url to that Google Sheet is below for reference:  
+
+https://docs.google.com/spreadsheets/d/1U_QsSv6-68VLI0-5YrSPp2Bo-QhzZftiMU10b1Ajk0k/edit#gid=1381900348. 
+
+In this data set, there are 320 observations, 28 predictors and the full season OBP response variable.
+
+
+# Read In and Clean Data
+```{r Read in and clean data, include = TRUE, echo = TRUE}
+# Read in and clean data
+sheet_url = "https://docs.google.com/spreadsheets/d/1U_QsSv6-68VLI0-5YrSPp2Bo-QhzZftiMU10b1Ajk0k/edit#gid=1381900348"
+# Use gs4_auth() and sign into Gmail to access Google Sheet
+mlb_df = read_sheet(sheet_url)
+head(mlb_df)
+dim(mlb_df)
+
+# Look for NAs in any columns
+colSums(is.na(mlb_df))
+# No NAs. That means we have no missing values. Awesome!
+
+# Let's remove playerid column as they will not have impact on predicting player's
+# FSOBP (full season obp)
+mlb_df = mlb_df[, -which(names(mlb_df) == "playerid")]
+
+# Now since we now all of the data is between March and April, I want to clean up
+# our predictor names to make coding easier.
+# Let's remove "MarApr_" from each predictor
+colnames(mlb_df)
+predictor_names = colnames(mlb_df)
+# Remove "MarApr_" from each predictor name
+new_names = sub("^MarApr_", "", predictor_names)
+colnames(mlb_df) = new_names
+
+# Now let's swap the "%" with "pct"
+predictor_names = colnames(mlb_df)
+new_names = sub("%", "_pct", predictor_names)
+colnames(mlb_df) = new_names
+
+# Now let's swap any "-" with "_"
+predictor_names = colnames(mlb_df)
+new_names = sub("-", "_", predictor_names)
+colnames(mlb_df) = new_names
+
+# Change HR/FB predictor to HR_FB
+colnames(mlb_df)[colnames(mlb_df) == "HR/FB"] = "HR_FB"
+
+# Change response variable to FS_OBP to make code easier
+colnames(mlb_df)[colnames(mlb_df) == "FullSeason_OBP"] = "FS_OBP"
+
+# Change all predictors to lower case
+colnames(mlb_df) = tolower(colnames(mlb_df))
+
+# Now that the data is cleaned, we can now start our analysis
+```
+
+
+# Exploratory Analysis
+As mentioned before, there are 320 observations in this data set. Each observation represents a player in the MLB and their corresponding statistics. There are 28 statistics from that 2019 March-April time frame when these statistics were gathered. Those corresponding statistics will be used as our predictors to predict the full season OBP for each player. Below you fill find each predictor in our data set and a brief description of what that statistic represents. Please refer to this list when an abbreviated predictor is used in discussion or in any of the models.  
+
+pa = player’s plate appearances.  
+ab = player’s at bats.  
+h = player’s hits.  
+hr = player’s home runs.  
+r = player’s runs scored.  
+rbi = player’s runs batted in (RBI).  
+sb = player’s stolen bases.  
+bb_pct = player’s walk percentage.  
+k_pct = player’s strikeout percentage.  
+iso = player’s isolated power.  
+babip = player’s BABIP.  
+avg = player’s batting average.  
+obp = player’s on-base percentage.  
+slg = player’s slugging percentage.  
+ld_pct = player’s line drive percentage.  
+gb_pct = player’s ground ball percentage.  
+fb_pct = player’s fly ball percentage.  
+iffb_pct = player’s infield fly ball percentage.  
+hr_fb = player’s home run per fly ball rate.  
+o_swing_pct = player’s out-of-zone swing-per-pitch percentage.  
+z_swing_pct = player’s in-zone swing-per-pitch percentage.  
+swing_pct = player’s total swing-per-pitch percentage.  
+o_contact_pct = player’s out-of-zone contact-per-swing percentage.  
+z_contact_pct = player’s in-zone contact-per-swing percentage.  
+contact_pct = player’s total contact-per-swing percentage.  
+
+What is OBP?  
+Below you will find the official description of what on-base percentage is (via https://www.mlb.com/glossary/standard-stats/on-base-percentage#):  
+"OBP refers to how frequently a batter reaches base per plate appearance. Times on base include hits, walks and hit-by-pitches, but do not include errors, times reached on a fielder's choice or a dropped third strike."  
+
+Here is the formula for OBP:  
+(Hits + HBP + Walks) / (At-Bats + HBP + Walks + Sacrifice Flies) 
+
+Before we dive into our regression models to predict each player's full season OBP, let's take a look at the data and see who in the MLB was performing the best offensively during this time frame.  
+
+Let's look at how many players are in this data set per team.  
+```{r 1}
+table(mlb_df$team)
+```
+There are two players not assigned to a team. I am not too worried about this as we will not be looking at full season OBP by team in our regression analysis.  
+
+Now, let's look at the top ten players who had the best OBP at the end of the 2019 season in our data set.
+```{r 2}
+top_ten_players_fs_obp = mlb_df[order(-mlb_df$fs_obp), ][1:10, c("name", "fs_obp")]
+print(top_ten_players_fs_obp)
+```
+Mike Trout, Christian Yelich and Alex Bregman were the top three players in OBP at the end of the regular season in 2019.  
+
+Now, let's look at the top ten players who had the best OBP during the March-April stretch.
+```{r 3}
+top_ten_players_obp = mlb_df[order(-mlb_df$obp), ][1:10, c("name", "obp")]
+print(top_ten_players_obp)
+```
+Cody, Bellinger, Dominic Smith and Mike Trout were the top three players in OBP during March-April of the 2019 season.  
+
+Let's look at which players were in each top ten.  
+```{r 4}
+common_names = intersect(top_ten_players_fs_obp$name, top_ten_players_obp$name)
+print(common_names)
+```
+The four players that were in both the top ten in OBP during March-April that finished in the top ten in OBP at the end of the regular season were Mike Trout, Christian Yelich, Anthony Rendon and Cody Bellinger. Looking back on that 2019 season, Mike Trout won the American League Most Valuable Player award and Cody Bellinger won the National League Most Valuable Player Award. Their consistency with OBP definitely played a role in helping them each win the MVP for their respective leagues.
+
+Let's look at top 10 list for hits, homeruns, runs, RBIs, and average.  
+Hits:  
+```{r 5}
+top_ten_players_hits = mlb_df[order(-mlb_df$h), ][1:10, c("name", "h")]
+print(top_ten_players_hits)
+```
+Cody Bellinger, Paul DeJong and Elvis Andurs were the top three players in hits during this stretch.  
+
+Homeruns:  
+```{r 6}
+top_ten_players_homeruns = mlb_df[order(-mlb_df$hr), ][1:10, c("name", "hr")]
+print(top_ten_players_homeruns)
+```
+Cody Bellinger, Christian Yelich and Eddie Rosario were top three in homeruns during this stretch.  
+
+RBIs:  
+```{r 7}
+top_ten_players_rbi = mlb_df[order(-mlb_df$rbi), ][1:10, c("name", "rbi")]
+print(top_ten_players_rbi)
+```
+Cody Bellinger, Christian Yelich and Marcell Ozuna were the top three in RBIs during this stretch.  
+
+Average:
+```{r 8}
+top_ten_players_avg = mlb_df[order(-mlb_df$avg), ][1:10, c("name", "avg")]
+print(top_ten_players_avg)
+```
+Cody Bellinger, Scott Kingery and Eric Sogard were top three in batting average during this stretch.  
+
+As we can see, Cody Bellinger led the entire league in hits, homeruns, RBIs, batting average and OBP during this stretch. What is interesting is that we do not see Mike Trout anywere in the top ten for any of the stats that we looked at. Without analyzing the entire 2019 season's data, we cannot say for sure what happened. But I think that it is safe to say that he had a slow start and finished incredibly strong to win his 5th MVP award that year.  
+
+Now, we want to start looking at the numeric values and see how they are correlated to each other and our response variable of fs_obp. We can remove name and team for this analysis.  
+```{r 9}
+mlb_df = mlb_df[, -which(names(mlb_df) == "name")]
+mlb_df = mlb_df[, -which(names(mlb_df) == "team")]
+```
+
+Let's look at correlation plot of our variables to see if we can remove any of our predictors.We are looking for instances of multicollinearity. We want to try and remove some variables to help simplify model during our regression analysis.  
+```{r 10, echo = FALSE}
+corrplot::corrplot(cor(mlb_df[sapply(mlb_df, is.numeric)], 
+             use = "pairwise.complete.obs"), method = "color")
+```
+
+We see that fb_pct (flyball percentage) has no correlation to fs_obp so we can remove this predictor. We also see that sb also has little correlation with fs_obp. Let's remove sb as well.  
+```{r 11}
+mlb_df = mlb_df[, -which(names(mlb_df) == "fb_pct")]
+mlb_df = mlb_df[, -which(names(mlb_df) == "sb")]
+```
+
+Let's look at the highly positively correlated predictors:
+We see that pa and ab are highly correlated. Knowing what we know about our formula to predict OBP, let's keep at-bats, and remove pa.  
+```{r 12}
+mlb_df = mlb_df[, -which(names(mlb_df) == "pa")]
+```
+
+We see that homeruns and hits are not that correlated, but we know that when you hit a homerun, it is considered a hit and based on our calculation for OBP, we only care about hits, not homeruns. Let's remove homeruns. Since we are removing hr, let's also remove hr_fb.  
+```{r 13}
+mlb_df = mlb_df[, -which(names(mlb_df) == "hr")]
+mlb_df = mlb_df[, -which(names(mlb_df) == "hr_fb")]
+```
+
+We see that avg and babip highly correlated. Since we know BABIP is batting average on balls put in play, we want to see average for balls also not put in play, so let's remove babip predictor.
+```{r 14}
+mlb_df = mlb_df[, -which(names(mlb_df) == "babip")]
+```
+
+We see that o_swing_pct and z_swing_pct is highly correlated with total swing_pct. Since both o_swing_pct and z_swing_pct are used to calculate swing_pct, let's remove o_swing_pct and z_swing_pct.  
+```{r 15}
+mlb_df = mlb_df[, -which(names(mlb_df) == "o_swing_pct")]
+mlb_df = mlb_df[, -which(names(mlb_df) == "z_swing_pct")]
+```
+
+We see the same thing with o_contact_pct and z_contact_pct being highly correlated with contact_pct. Since o_contact_pct and z_contact_pct are used to calculate contact_pct, let's remove o_contact_pct and z_contact_pct.  
+```{r 16}
+mlb_df = mlb_df[, -which(names(mlb_df) == "o_contact_pct")]
+mlb_df = mlb_df[, -which(names(mlb_df) == "z_contact_pct")]
+```
+
+We see that slg and iso, are highly correlated. The iso stat is difference between slugging and average to get isolated power. In this case, let's just remove iso because we already have slg and avg predictors in data set.
+```{r 17}
+mlb_df = mlb_df[, -which(names(mlb_df) == "iso")]
+```
+
+Let's look at the highly negatively correlated predictors:
+We see that contact_pct and k_pct are negatively correlated and could create multicollinearity issues. Based on our knowledge of what we are looking for in full season OBP, let's keep contact_pct and remove k_pct.  
+```{r 18}
+mlb_df = mlb_df[, -which(names(mlb_df) == "k_pct")]
+```
+
+We also see that swing_pct and bb_pct are highly negatively correlated. Let's remove swing_pct.
+```{r 19}
+mlb_df = mlb_df[, -which(names(mlb_df) == "swing_pct")]
+```
+
+Now that we have removed some highly(positively and negativly) correlated predictors to avoid multicollinearity issues, let's look at how many predictors that we are left with.  
+```{r 20, echo = FALSE}
+corrplot::corrplot(cor(mlb_df[sapply(mlb_df, is.numeric)], 
+             use = "pairwise.complete.obs"), method = "color")
+```
+
+We are now left with 12 predictors to help us predict our full season OBP statistic.  
+
+Let's look at correlation of each predictor in regards to full season OBP.  
+```{r 21}
+correlations = cor(mlb_df)
+ordered_fs_obp_correlations = correlations["fs_obp", order(abs(correlations["fs_obp",]), decreasing = TRUE)]
+print(ordered_fs_obp_correlations)
+```
+We see that obp, r, avg, h, slg, and bb_pct are most correlated variables with fs_obp.  
+We then see that gb_pct, iffb_pct, ld_pct, and contact_pct are least correlated variables with fs_obp.  
+We will most likely not be using some of these predictors that are not heavily correlated with fs_obp. We will see this when we run regression models.  
+
+Let's look at histogram and boxplot of each of the 12 predictor to see how each predictor is distributed. We can also see if we want to transform any of the predictors in our linear regression analysis. We tried doing a log and a square root transformation on each predictor.  
+
+At bats:  
+```{r 22,echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$ab, main = "Distribution of At-Bats")
+boxplot(mlb_df$ab, main = "Boxplot of At-Bats",
+        ylab = "Frequency")
+```
+
+The at-bats predictor is slightly skewed left. There are no outliers either. We tried both a log and square root transformation to make distribution more normal, but were unable to do so. We decided against transforming this predictor.  
+
+Hits:  
+```{r 23, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$h, main = "Distribution of Hits")
+boxplot(mlb_df$h, main = "Boxplot of Hits",
+        ylab = "Frequency")
+```
+
+The hits predictor has relativey normal distribution and one outlier. We decided not to transform this variable.  
+
+Runs:  
+```{r 24, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$r, main = "Distribution of Runs")
+boxplot(mlb_df$r, main = "Boxplot of Runs",
+        ylab = "Frequency")
+```
+
+The distributions of runs is slightly skewed right and there is one outlier. We found that a square root transformation made the distribution more normal and created no outliers.  
+
+```{r 25, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(sqrt(mlb_df$r), main = "Distribution of sqrt(Runs)")
+boxplot(sqrt(mlb_df$r), main = "Boxplot of sqrt(Runs)",
+        ylab = "Frequency")
+```
+
+RBIs:
+```{r 26, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$rbi, main = "Distribution of RBIs")
+boxplot(mlb_df$rbi, main = "Boxplot of RBIs",
+        ylab = "Frequency")
+```
+
+The distribution of RBIs is slightly skewed right and has two outliers. We found that a square root transformation created a more normal distribution. There was still one outlier when we transformed the predictor.  
+
+```{r 27, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(sqrt(mlb_df$rbi), main = "Distribution of sqrt(RBIs)")
+boxplot(sqrt(mlb_df$rbi), main = "Boxplot of sqrt(RBIs)",
+        ylab = "Frequency")
+```
+
+Walk percentage:  
+
+```{r 28, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$bb_pct, main = "Distribution of Walk %")
+boxplot(mlb_df$bb_pct, main = "Boxplot of Walk %",
+        ylab = "Frequency")
+```
+
+The distribution of walk percentage is relatively normal. There are a few outliers that can be seen. We found that a square root transformation kept the distribution normal and reduced the outliers down to only three.  
+
+```{r 29, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(sqrt(mlb_df$bb_pct), main = "Distribution of sqrt(Walk %)")
+boxplot(sqrt(mlb_df$bb_pct), main = "Boxplot of sqrt(Walk %)",
+        ylab = "Frequency")
+```
+
+Average:  
+
+```{r 30, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$avg, main = "Distribution of Average")
+boxplot(mlb_df$avg, main = "Boxplot of Average",
+        ylab = "Frequency")
+```
+
+The distribution of average is relatively normal. There are four outliers that can be seen. We found that a square root transformation kept the distribution normal, and reduced the outliers down to two.  
+
+```{r 31, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(sqrt(mlb_df$avg), main = "Distribution of sqrt(Average)")
+boxplot(sqrt(mlb_df$avg), main = "Boxplot of sqrt(Average)",
+        ylab = "Frequency")
+```
+
+OBP:  
+
+```{r 32, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$obp, main = "Distribution of OBP")
+boxplot(mlb_df$obp, main = "Boxplot of On OBP",
+        ylab = "Frequency")
+```
+
+The distribution of OBP is relatively normal. There are four outliers that can be seen. We found that a square root transformation kept the distribution normal. It did not remove the four outliers but brought them closer to our uper and lower whiskers.  
+
+```{r 33, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(sqrt(mlb_df$obp), main = "Distribution of sqrt(OBP)")
+boxplot(sqrt(mlb_df$obp), main = "Boxplot of On sqrt(OBP)",
+        ylab = "Frequency")
+```
+
+Line drive percentage:  
+
+```{r 34, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$ld_pct, main = "Distribution of Line Drive %")
+boxplot(mlb_df$ld_pct, main = "Boxplot of Line Drive %",
+        ylab = "Frequency")
+```
+
+The distribution of line drive percentage predictor is relatively normal. We can see that we have two outlies. We tried both a log and square root transformation and found that neither made the distribution normal or handled those outliers.  
+
+Ground ball percentage:  
+
+```{r 35, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$gb_pct, main = "Distribution of Ground Ball %")
+boxplot(mlb_df$gb_pct, main = "Boxplot of Ground Ball %",
+        ylab = "Frequency")
+```
+
+Distribution of ground ball percentage is relatively normal. We see three outliers. After seeing that the log and square root transformation did not help with distribution or outliers, we decided not to transform this predictor.  
+
+Infield fly ball percentage:  
+
+```{r 36, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$iffb_pct, main = "Distribution of IFFB %")
+boxplot(mlb_df$iffb_pct, main = "Boxplot of IFFB %",
+        ylab = "Frequency")
+```
+
+We can see that the distribution of infield fly ball percentage is skewed heavily to the right with five outliers. We found that the square root transformation had the best affect on the normality of the distribution, compared to how left skewed it was.  
+
+```{r 37, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(sqrt(mlb_df$iffb_pct), main = "Distribution of sqrt(IFFB %)")
+boxplot(sqrt(mlb_df$iffb_pct), main = "Boxplot of sqrt(IFFB %",
+        ylab = "Frequency")
+```
+
+Contact percentage:  
+
+```{r 38, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$contact_pct, main = "Distribution of Contact %")
+boxplot(mlb_df$contact_pct, main = "Boxplot of Contact %",
+        ylab = "Frequency")
+```
+
+The contact percentage predictor has relatively normal distribution with four outliers. We found that the log and square root transformation did not help make the distribution more normal nor did it help with the outliers. We decided not to transform this variable.  
+
+Let's look at the distribution of our full season OBP response variable:  
+
+```{r 39, echo = FALSE}
+par(mfrow = c(1, 2))
+hist(mlb_df$fs_obp, main = "Distribution of FS_OBP")
+boxplot(mlb_df$fs_obp, main = "Boxplot of FS_OBP",
+        ylab = "Frequency")
+```
+
+Our response variable follows a relatively normal distribution. We do see that there are six outliers. Since we transformed our predictors, we decided against predicting our response variable.  
+
+Now, that we have explored our data and removed/transformed some predictors, we can now turn our focus to our quantitative regression model analysis.  
+
+
+# Quantitative Regression Analysis
+In this section of our analysis, we will run several regression models. We will start with a linear regression model on the entire data itself to get an idea of how the data is fitting to the model. After we explore how a linear model performs on the entire data set, we will then create a traning and test data set to see how well a trained model can predict the full season OBP of our test data. Let us start with looking at a linear model on the entire data set.  
+
+
+## Linear Regression Model
+Let us run linear regression model on entire data set.  
+```{r lm 1}
+fs_obp_lm = lm(fs_obp ~., mlb_df)
+summary(fs_obp_lm)
+```
+
+We are looking to see which predictors are statistically significant when predicting full season OBP. To do this, we we will use the hypothesis test with the null hypothesis being that none of the predictors are statistically significant. If the p-value for a predictor is less than 0.05, we reject the null hypothesis and say that the predictor is statistically significant.  
+We can see that many of the variables have p-values that are greater than 0.05: ab, r, rbi, bb_pct, slg, ld_pct, gb_pct, iffb_pct. We see variables with p-values less than 0.05: h, avg, obp, contact_pct.  
+Let's run model using h, avg, obp, contact_pct.  
+
+```{r lm 2}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct, mlb_df)
+summary(fs_obp_lm)
+```
+
+We see that all of the predictors in this model have p-values less than 0.05. WE see that there is a R^2 value of approximately 0.44 meaning that this model explains about 44% of the variance in the data set.  
+Of the predictors that we have in this model, let us add our transformations that we went with in our exploratory analysis to help make distributions of predictors more normal.  
+Earlier, we decided to take square root of both avg and obp to help make predictors more normal.  
+```{r lm 3}
+fs_obp_lm = lm(fs_obp ~ h + sqrt(avg) + sqrt(obp) + contact_pct, mlb_df)
+summary(fs_obp_lm)
+```
+
+These transformations did not create any major improvements on our data. Since there was no major statistical impact on our model with the transformations, let us not transform avg and obp predictors to maintain simplicity.  
+
+Let us add in the variables that we initially removed, one by one to see if their respective p-values are less than 0.05: ab, r, rbi, bb_pct, slg, ld_pct, gb_pct, iffb_pct.  
+If we transformed the predictors we are adding in earlier in our analysis, do the same here.  
+ab:  
+```{r lm 4}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + ab, mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of ab is greater than 0.05. Let's not add this predictor.  
+
+sqrt(r):  
+```{r lm 5}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + sqrt(r), mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of sqrt(r) is greater than 0.05. Let's not add this predictor. 
+
+sqrt(rbi):  
+```{r lm 6}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + sqrt(rbi), mlb_df)
+summary(fs_obp_lm)
+```
+
+Although the p-value of sqrt(rbi) is less than 0.05, it made our h predictor no longer statistically significant as the p-value of h is now greater than 0.05. Let us try and add just the rbi predictor without the transformation.  
+```{r lm 7}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi, mlb_df)
+summary(fs_obp_lm)
+```
+
+In this model, both rbi and h are statistically significant as each of their p-values are less than 0.05.  
+
+sqrt(bb_pct):  
+```{r lm 8}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi + sqrt(bb_pct), mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of sqrt(bb_pct) is greater than 0.05. Let's not add this predictor. 
+
+slg:  
+```{r lm 9}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi + slg, mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of slg is greater than 0.05. Adding slg also made the p-value of rbi greater than 0.05. Let's not add this predictor.  
+
+ld_pct:  
+```{r lm 10}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi + slg, mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of ld_pct is greater than 0.05. Let's not add this predictor.  
+
+gb_pct:  
+```{r lm 11}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi + gb_pct, mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of gb_pct is greater than 0.05. Let's not add this predictor.  
+
+sqrt(iffb_pct):  
+```{r lm 12}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi + sqrt(iffb_pct), mlb_df)
+summary(fs_obp_lm)
+```
+
+The p-value of sqrt(iffb_pct) is greater than 0.05. Let's not add this predictor.  
+
+Of the predictors that we removed from our initial linear model, we only added back the rbi predictor.  
+Now, let us have the fitted model on entire data set predict fs_obp and see how well it performs by checking mean squared error.  
+```{r lm 13}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi, mlb_df)
+pred_fs_obp_lm = predict(fs_obp_lm, newdata = mlb_df)
+mean((pred_fs_obp_lm - mlb_df$fs_obp)^2)
+```
+
+The mean squared error is 0.0008. However, this was using the model fitted on the entire data set to predict fs_obp. So there is probably a good chance that our model is overfitting the data.  
+
+
+## Training and Test Data
+Now, let's create training and test data from mlb_df. We can then use fitted model on training data to predict test data.  
+
+```{r train_test 1}
+dim(mlb_df)
+```
+
+As we know, there are 320 observations.  
+Since we only have 320 observations, our parameter estimates will have higher variance. Since we have a smaller number of observations, let us do a 70:30 split on our data where 70% of our data will be our training data,and 30% of our data will be our test data.  
+```{r train_test 2}
+set.seed(1)
+index = createDataPartition(mlb_df$fs_obp, p = 0.7, list = FALSE)
+mlb_train = mlb_df[index,]
+mlb_test = mlb_df[-index,]
+```
+
+Let us look at the dimensions for each set to see how many observations are each.  
+Training set:  
+```{r train_test 3}
+dim(mlb_train)
+```
+
+There are 226 observations in our training set.  
+
+Test set:  
+```{r train_test 4}
+dim(mlb_test)
+```
+
+There are 94 observations in our test set. Now let us go back to our linear regression analysis and use the training data to refit our model.  
+
+## Linear Regression Model Continued
+Fit our model from earlier using the training data.  
+```{r lm 14}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct + rbi, mlb_train)
+summary(fs_obp_lm)
+```
+
+All of the predictors have p-values less than 0.05, besides rbi. Since we initially removed rbi, then added it back in, let us remove rbi again.  
+
+```{r lm 15}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct, mlb_train)
+summary(fs_obp_lm)
+```
+
+Now, all of the predictors have p-values less than 0.05. The contact_pct predictor's p-value just just barely came in less than 0.05. So we will keep it.  
+The R^2 value is 0.4911 meaning our trained model explains 49% of the variability in our training data.  
+
+Let us use this model to predict the fs_obp value in our test data and check the mean squared error.  
+```{r lm 16}
+pred_fs_obp_lm = predict(fs_obp_lm, newdata = mlb_test)
+mean((pred_fs_obp_lm - mlb_test$fs_obp)^2)
+```
+
+The mean squared error value is 0.00099, which is very close to 0. Which is what we want. We want our test mean squared error rate to be as close to 0 as possible.  
+This is our first fitted model on the training data that was used to predict test data. We will use this test mean squared error rate to compare other regression models that we fit. This is how we will see if other models have more accurate predictions.  
+Below you will see a plot of our predicted versus actual values of fs_obp.  
+
+```{r lm 17}
+par(mfrow = c(1, 1))
+lm_plot = data.frame(Actual = mlb_test$fs_obp, Predicted = pred_fs_obp_lm)
+ggplot(lm_plot, aes(x = Actual, y = Predicted)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +  # Adds a line of perfect prediction
+  labs(x = "Actual Full Season OBP", 
+       y = "Predicted Full Season OBP", 
+       title = "Actual vs. Predicted Full Season OBP") +
+  theme_minimal()
+```
+
+
+## Ridge Regression Model
+Using ridge regression, our goal here is to see if we can produce a test mean squared error less than the the mean squared error that we found in the linear regression model section above. What we will first is create a training matrix and a test matrix for our ridge regression. Using cross-validation, I found that the best shrinking parameter, lambda, to use for this model is when lambda = 0.00247. Using lambda = 0.00247 in my ridge regression model using the training matrix to predict the response fs_obp values in the test data, I found a test mean squared error of 0.001. This model produced the same tese mean squared error as our linear regression model.  
+```{r ridge 1}
+train_matrix = model.matrix(fs_obp ~., mlb_train)
+test_matrix = model.matrix(fs_obp ~., mlb_test)
+# Now we need to select lambda using cross-validation
+cv_out = cv.glmnet(train_matrix, mlb_train$fs_obp, alpha = 0)
+best_lam = cv_out$lambda.min
+best_lam
+```
+Lambda chosen by cross-validation is 0.00247.  
+Now we fit ridge regression model and make predictions.  
+```{r ridge 2}
+fs_obp_ridge = glmnet(train_matrix, mlb_train$fs_obp, alpha = 0)
+pred_fs_obp_ridge = predict(fs_obp_ridge, s = best_lam, newx = test_matrix)
+# Find mean squared error:
+mean((pred_fs_obp_ridge - mlb_test$fs_obp)^2)
+```
+
+
+## Lasso Regression
+Now we will fit a lasso regression model to the data. We will use the same training and test matrices created in the ridge regression model from the previous section to fit this lasso regression model. The best shrinking parameter, lambda, to use in the lasso regression model is when lambda = 0.0000091. Using that lambda in the regression model, we get a test mean squared error value of 0.001. Similar to our ridge regresison model, our lasso regression model produced the same test mean squared error of our linear regression model.  
+```{r lasso 1}
+cv_out = cv.glmnet(train_matrix, mlb_train$fs_obp, alpha = 1)
+best_lam = cv_out$lambda.min
+best_lam
+```
+Lambda chosen by cross-validation is 0.0000091.  
+Now we fit lasso regression model and make predictions.  
+```{r lasso 2}
+fs_obp_lasso = glmnet(train_matrix, mlb_train$fs_obp, alpha = 1)
+pred_fs_obp_lasso = predict(fs_obp_lasso, s = best_lam, newx = test_matrix)
+# Find mean squared error:
+mean((pred_fs_obp_lasso - mlb_test$fs_obp)^2)
+```
+
+## Principal Components Regression
+The main goal of principal components regression is to reduce the dimensions of the model by removing predictors to simplify the model. Let us fit a principal components regression model using the training data to then predict the response variable fs_obp in the test data.  
+```{r pcr 1}
+fs_obp_pcr = pcr(fs_obp ~., data = mlb_train, 
+              scale = TRUE, validation = "CV")
+summary(fs_obp_pcr)
+```
+
+```{r pcr 2}
+validationplot(fs_obp_pcr, val.type = "MSEP")
+```
+
+We see that M = 6 produces lowest mean squared error of prediction on training data and explains 51% of the variance of the training data. 
+Now, let us predict our test data.  
+```{r pcr 3}
+pred_fs_obp_pcr = predict(fs_obp_pcr, mlb_test, ncomp = 6)
+mean((pred_fs_obp_pcr - mlb_test$fs_obp)^2)
+```
+
+From our principal component regression model, we get a test mean squared error value of 0.001. Similar to our ridge regression model and our lasso regression model, the produced the same test mean squared error of our linear regression model.  
+
+
+## Partial Least Squares
+We will now try and reduce the dimensions by fitting a partial least squares model. Our goal, once again, is to create a more simple model.  
+```{r pls 1}
+fs_obp_plsr = plsr(fs_obp ~., data = mlb_train, 
+                 scale = TRUE, validation = "CV")
+summary(fs_obp_plsr)
+```
+
+```{r pls 2}
+validationplot(fs_obp_plsr, val.type = "MSEP")
+```
+
+We see that M = 10 produces lowest mean squared error of prediction on training data. However, we are trying to reduce variables in the model, so let's look at when M = 3 as that has almost same MSEP as when M = 10.  
+The partial least squares model when M = 3 explains about 51% of the variance of training data.  
+Let us predict our test data.  
+```{r pls 3}
+pred_fs_obp_plsr = predict(fs_obp_plsr, mlb_test, ncomp = 3)
+mean((pred_fs_obp_plsr - mlb_test$fs_obp)^2)
+```
+
+From our partial least squares model, we get a test mean squared error value of 0.001. This is the same mean squared error value from our previous model that we fit.  
+
+## Regression Trees
+We will now fit a regression tree using our training data set and analyze how many terminal nodes we will have.  
+```{r tree 1}
+fs_obp_tree = tree(fs_obp ~ ., mlb_train)
+summary(fs_obp_tree)
+```
+
+There are 16 terminal nodes in this tree model and there are 11 variables being used as well.  
+```{r tree 2}
+plot(fs_obp_tree)
+text(fs_obp_tree, pretty = 0)
+```
+
+Not the prettiest tree to visually look at. Let's use the trained tree model to predict our test data.  
+```{r tree 3}
+yhat = predict(fs_obp_tree, newdata = mlb_test)
+mean((yhat - mlb_test$fs_obp)^2)
+```
+
+Once again, our model produced a test mean squared error value of 0.001. So far, we have not produced a different mean squared error rate.  
+Since this tree is quite confusing to understand, we want to try and prune the tree using cross-validation, to make it more simple.  
+```{r tree 4}
+cv_tree = cv.tree(fs_obp_tree)
+plot(cv_tree$size, cv_tree$dev, type = "b")
+```
+
+We see that tree size 5 minimizes cross-validation error. Let us prune our tree to make it more interpretable and see if it impacts our test mean squared error rate.  
+
+```{r tree 5}
+fs_obp_prune = prune.tree(fs_obp_tree, best = 5)
+summary(fs_obp_prune)
+```
+
+3 variables were used in this pruned tree that now has 5 terminal nodes.  
+Let us plot this pruned tree.  
+```{r tree 6}
+plot(fs_obp_prune)
+text(fs_obp_prune, pretty = 0)
+```
+
+This pruned tree is much more easy to interpret compared to the previous tree that had 16 terminal nodes. Let us predict the test fs_obp using this pruned tree model.  
+```{r tree 7}
+yhat = predict(fs_obp_prune, newdata = mlb_test)
+mean((yhat - mlb_test$fs_obp^2))
+```
+
+Although this pruned tree was much more interpretable, it did produce a test mean squared error rate of 0.219 compared to the 0.001 of our un-pruned tree.  
+
+
+## Bagging Model
+Now we will fit a bagging model with 25 boostrap replications and find the test mean squared error rate to see how they compare to previous models. 
+```{r bag 1}
+fs_obp_bag = bagging(fs_obp ~., data = mlb_train)
+fs_obp_bag
+```
+
+Now let us predict our test data.  
+```{r bag 2}
+yhat_bag = predict(fs_obp_bag, newdata = mlb_test)
+mean((yhat_bag - mlb_test$fs_obp)^2)
+```
+
+The bagging model fitted by the training data produced a test mean squared error rate of 0.001. This mean squared error rate seems to be consistent with every model that we fit to the trained data.  
+
+## Random Forest
+Now we will fit a random forest model with 100 trees and using all predictors in the datat set and then use that model to predict our test data.  
+```{r rf 1}
+set.seed(1)
+fs_obp_rf = randomForest(fs_obp ~., ntree = 100,
+                       mtry = 12, importance = TRUE, data = mlb_train)
+fs_obp_rf
+```
+```{r rf 2}
+varImpPlot(fs_obp_rf)
+```
+
+The random forest used all 12 predictors at each split and explains approximately 45% of the variance in the training data. We see that the most important predictors in this model are obp, contact_pct and ab. Now let us now predict our test data.  
+```{r rf 3}
+yhat_rf = predict(fs_obp_rf, newdata = mlb_test)
+mean((yhat_rf - mlb_test$fs_obp)^2)
+```
+
+The random forest model also produced a test mean squared error rate of 0.001.  
+
+
+## Boosted Model
+In this section, we will fit a boosted model using the training data and will make predictions on that model using the test data to compare. We will try a few different shrinking parameter lambda values to compare mean squared test error rates of models. Our boosted models that we will fit will use lambda values of 0.001, 0.01. 0.1, and 0.2 and 1000 trees.  
+Lambda = 0.001:
+```{r boost 1}
+fs_obp_boost = gbm(fs_obp ~., data = mlb_train, distribution = "gaussian",
+                n.trees = 1000)
+yhat_boost = predict(fs_obp_boost, newdata = mlb_test, 
+                     n.trees = 1000)
+mean((yhat_boost - mlb_test$fs_obp)^2)
+```
+
+This boosted model produced a test mean squared error ate of 0.001.  
+
+Lambda = 0.01:
+```{r boost 2}
+fs_obp_boost = gbm(fs_obp ~., data = mlb_train, distribution = "gaussian",
+                   n.trees = 1000, shrinkage = 0.01)
+yhat_boost = predict(fs_obp_boost, newdata = mlb_test, 
+                     n.trees = 1000)
+mean((yhat_boost - mlb_test$fs_obp)^2)
+```
+
+This boosted model also produced a test mean squared error rate of 0.001.  
+
+Lambda = 0.1:
+```{r boost 3}
+fs_obp_boost = gbm(fs_obp ~., data = mlb_train, distribution = "gaussian",
+                   n.trees = 1000, shrinkage = 0.1)
+yhat_boost = predict(fs_obp_boost, newdata = mlb_test, 
+                     n.trees = 1000)
+mean((yhat_boost - mlb_test$fs_obp)^2)
+```
+
+This boosted model also produced a test mean squared error rate of 0.001.  
+
+Lambda = 0.2
+```{r boost 4}
+fs_obp_boost = gbm(fs_obp ~., data = mlb_train, distribution = "gaussian",
+                   n.trees = 1000, shrinkage = 0.2)
+yhat_boost = predict(fs_obp_boost, newdata = mlb_test, 
+                     n.trees = 1000)
+mean((yhat_boost - mlb_test$fs_obp)^2)
+```
+
+This boosted model also produced a test mean squared error rate of 0.001.  
+
+# Conclusion
+During our quantitative regression analysis, we fit 9 models in our analysis: linear regression model, ridge regression mode, lasso regression model, principal component regression model, partial least squares model, regression tree model, bagging model, random forest model and a boosted model.  
+When using the MLB training data to train these models and predict the full season OBP for each player, we were only able to produce a test mean squared error of 0.001 for all of the models. Since all of our models produced the same test mean squared error, we want to choose the most simple and interpretable model.  
+Of all the models, the most interpretable is our simple linear model R code below:  
+```{r conclusion 1, eval = FALSE}
+fs_obp_lm = lm(fs_obp ~ h + avg + obp + contact_pct, mlb_train)
+```
+
+This linear model takes hits, average, obp and contact percentage to predict the full season obp of a player.  
+
+Here is the model below with each predicgtor's respective coefficient:  
+Full Season OBP estimate = 0.1598 + 0.0011(*Hits*) - 0.2537(*Average*) + 0.5084(*On-Base Percentage*) + 0.0523(*Contact Percentage*)
+
+Based on our analysis, given a set of MLB data, we can use the linear model formula above to predict a player's full season OBP.
+
+
+# Sources
+https://docs.google.com/spreadsheets/d/1U_QsSv6-68VLI0-5YrSPp2Bo-QhzZftiMU10b1Ajk0k/edit#gid=1381900348. 
+
+https://www.mlb.com/glossary/standard-stats/on-base-percentage#
