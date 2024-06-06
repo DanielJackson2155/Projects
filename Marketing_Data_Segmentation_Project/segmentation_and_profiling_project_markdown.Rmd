@@ -1,0 +1,370 @@
+---
+title: "Segmentation & Profiling Project"
+author: "Daniel Jackson"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+# Table of Contents
+Introduction. 
+Summary of Findings.  
+Detailed Technical Section 
+
+# Introduction
+This segmentation and profiling section of the project will be a continuation of our data due diligence project. As we did in the data due diligence project, we will acting as a marketing analytics manager for a telecommunications company. After cleaning the customer data set and creating a subset of the original data, we are now tasked with developing customer segmentation that can support effective, and economically sound, customer retention efforts.
+To accomplish this goal, we will be using two of the three segmentation techniques: rules-based, supervised, or unsupervised (We need to figure out which two that we will be doing and justify why we are using each method).
+In this project, we will provide a summary of our key findings and recommendations that we will make as marketing analytics manager. We will highlight notable insights and provide proper conclusions and recommendations based on our findings. 
+Then, we will run through a technical section describing the segmentation methods that we chose, highlight detailed findings, and use visualizations created in Tableau to depict the individual customer segments that we created. 
+We will begin by reading in our data subset that we created in our previous data due diligence project. 
+
+``` {r libraries, echo = FALSE, results = 'hide', message = FALSE}
+library(dplyr)
+library(tidyr)
+```
+
+```{r setup, include = TRUE, eval = FALSE}
+# Packages used
+library(dplyr)
+library(tidyr)
+
+# Read in data
+sub_df = read.csv("combined_customer_data.csv")
+
+# Check dimension of data frame
+dim(sub_df)
+# 4347 observations
+# 11 columns
+
+# Let us remove X column
+sub_df = sub_df[, -which(names(sub_df) == "X")]
+
+dim(sub_df)
+# 4347 observations
+# 10 columns
+
+str(sub_df)
+# Let us change numberpets, household size to numeric vectors and change homeowner to Yes or No (1 for yes, 0 for no)
+sub_df = sub_df %>%
+  mutate(
+    numberpets = as.numeric(numberpets),
+    householdsize = as.numeric(householdsize),
+    homeowner = ifelse(homeowner == 1, "Yes", "No")
+  )
+
+str(sub_df)
+```
+
+```{r Rules-Based Segmentation 1, include = TRUE, eval = FALSE}
+# Check min, max and average
+min(sub_df$log_tot_value)
+# 2.03 min value
+min_val = min(sub_df$log_tot_value)
+
+max(sub_df$log_tot_value)
+# 9.95 max value
+max_val = max(sub_df$log_tot_value)
+
+mean(sub_df$log_tot_value)
+# 6.46 average value
+mean_val = mean(sub_df$log_tot_value)
+
+# 1/3 threshold
+one_third_val = ((1/3) * max_val)
+
+# 2/3 threshold
+two_third_val = (2 * one_third_val)
+
+
+# Let us create customer_value qualitative variable using our breaks that we created using the cut function
+sub_df$customer_value = cut(sub_df$log_tot_value, breaks=c(0, one_third_val, two_third_val, max_val), labels=c("Low", "Medium", "High"))
+unique(sub_df$customer_value)
+# Check if any NA values in customer_value variable
+any(is.na(sub_df$customer_value))
+# FALSE
+
+table(sub_df$customer_value)
+
+# Now let us combine this rule with a few variables
+```
+
+```{r Rules-Based Segmentation 2, include = TRUE, eval = FALSE}
+# Region
+unique(sub_df$region)
+sub_df = sub_df %>% mutate(reg_segment = case_when(
+      customer_value == "Low" & region == "northeast" ~ 1,
+      customer_value == "Medium" & region == "northeast" ~ 2,
+      customer_value == "High" & region == "northeast" ~ 3,
+      customer_value == "Low" & region == "southeast" ~ 4,
+      customer_value == "Medium" & region == "southeast" ~ 5,
+      customer_value == "High" & region == "southeast" ~ 6,
+      customer_value == "Low" & region == "west" ~ 7,
+      customer_value == "Medium" & region == "west" ~ 8,
+      customer_value == "High" & region == "west" ~ 9,
+      customer_value == "Low" & region == "southwest" ~ 10,
+      customer_value == "Medium" & region == "southwest" ~ 11,
+      customer_value == "High" & region == "southwest" ~ 12,
+      customer_value == "Low" & region == "midwest" ~ 13,
+      customer_value == "Medium" & region == "midwest" ~ 14,
+      customer_value == "High" & region == "midwest" ~ 15
+    ))
+
+# 1 = low and northeast
+# 2 = medium and northeast
+# 3 = high and northeast
+# 4 = low and southeast
+# 5 = medium and southeast
+# 6 = high and southeast
+# 7 = low and west
+# 8 = medium and west
+# 9 = high and west
+# 10 = low and southwest
+# 11 = medium and southwest
+# 12 = high and southwest
+# 13 = low  and midwest
+# 14 = medium and midwest
+# 15 = high and midwest
+
+# Check for any NA values in segment variable
+any(is.na(sub_df$reg_segment))
+# FALSE
+
+# Summarize results of each segment
+sub_df %>% 
+  add_count(reg_segment) %>%
+  group_by(reg_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 3, include = TRUE, eval = FALSE}
+# Remove qualitative variables
+sub_df %>% 
+  select(-c("region","homeowner","jobcategory", "carbrand", "customer_value")) %>% 
+  add_count(reg_segment) %>%
+  group_by(reg_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 4, include = TRUE, eval = FALSE} 
+# Homeowner
+unique(sub_df$homeowner)
+sub_df = sub_df %>% mutate(home_segment = case_when(
+      customer_value == "Low" & homeowner == "Yes" ~ 1,
+      customer_value == "Medium" & homeowner == "Yes" ~ 2,
+      customer_value == "High" & homeowner == "Yes" ~ 3,
+      customer_value == "Low" & homeowner == "No" ~ 4,
+      customer_value == "Medium" & homeowner == "No" ~ 5,
+      customer_value == "High" & homeowner == "No" ~ 6
+    ))
+
+# 1 = low and homeowner
+# 2 = medium and homeowner
+# 3 = high and homeowner
+# 4 = low and non-homeowner
+# 5 = medium and non-homeowner
+# 6 = high and non-homeowner
+
+# Summarize results of each segment
+sub_df %>% 
+  add_count(home_segment) %>%
+  group_by(home_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 5, include = TRUE, eval = FALSE}
+# Remove qualitative variables
+sub_df %>% 
+  select(-c("region","homeowner","jobcategory", "carbrand", "customer_value")) %>% 
+  add_count(home_segment) %>%
+  group_by(home_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 6, include = TRUE, eval = FALSE} 
+# Job Category
+unique(sub_df$jobcategory)
+sub_df = sub_df %>% mutate(job_segment = case_when(
+      customer_value == "Low" & jobcategory == "Professional" ~ 1,
+      customer_value == "Medium" & jobcategory == "Professional" ~ 2,
+      customer_value == "High" & jobcategory == "Professional" ~ 3,
+      customer_value == "Low" & jobcategory == "Sales" ~ 4,
+      customer_value == "Medium" & jobcategory == "Sales" ~ 5,
+      customer_value == "High" & jobcategory == "Sales" ~ 6,
+      customer_value == "Low" & jobcategory == "Labor" ~ 7,
+      customer_value == "Medium" & jobcategory == "Labor" ~ 8,
+      customer_value == "High" & jobcategory == "Labor" ~ 9,
+      customer_value == "Low" & jobcategory == "Agriculture" ~ 10,
+      customer_value == "Medium" & jobcategory == "Agriculture" ~ 11,
+      customer_value == "High" & jobcategory == "Agriculture" ~ 12,
+      customer_value == "Low" & jobcategory == "Service" ~ 13,
+      customer_value == "Medium" & jobcategory == "Service" ~ 14,
+      customer_value == "High" & jobcategory == "Service" ~ 15,
+      customer_value == "Low" & jobcategory == "Crafts" ~ 16,
+      customer_value == "Medium" & jobcategory == "Crafts" ~ 17,
+      customer_value == "High" & jobcategory == "Crafts" ~ 18
+    ))
+
+# 1 = low and professional
+# 2 = medium and professional
+# 3 = high and professional
+# 4 = low and sales
+# 5 = medium and sales
+# 6 = high and sales
+# 7 = low and labor
+# 8 = medium and labor
+# 9 = high and labor
+# 10 = low and agriculture
+# 11 = medium and agriculture
+# 12 = high and agriculture
+# 13 = low  and service
+# 14 = medium and service
+# 15 = high and service
+# 16 = low and crafts
+# 17 = medium and crafts
+# 18 = high and crafts
+
+# Summarize results of each segment
+sub_df %>% 
+  add_count(job_segment) %>%
+  group_by(job_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 7, include = TRUE, eval = FALSE}
+# Remove qualitative variables
+sub_df %>% 
+  select(-c("region","homeowner","jobcategory", "carbrand", "customer_value")) %>% 
+  add_count(job_segment) %>%
+  group_by(job_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 8, include = TRUE, eval = FALSE} 
+# Car Brand
+unique(sub_df$carbrand)
+sub_df = sub_df %>% mutate(car_segment = case_when(
+      customer_value == "Low" & carbrand == "Domestic" ~ 1,
+      customer_value == "Medium" & carbrand == "Domestic" ~ 2,
+      customer_value == "High" & carbrand == "Domestic" ~ 3,
+      customer_value == "Low" & carbrand == "Foreign" ~ 4,
+      customer_value == "Medium" & carbrand == "Foreign" ~ 5,
+      customer_value == "High" & carbrand == "Foreign" ~ 6
+    ))
+
+# 1 = low and domestic
+# 2 = medium and domestic
+# 3 = high and domestic
+# 4 = low and foreign
+# 5 = medium and foreign
+# 6 = medium and foreign
+
+# Summarize results of each segment
+sub_df %>% 
+  add_count(car_segment) %>%
+  group_by(car_segment,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Rules-Based Segmentation 9, include = TRUE, eval = FALSE}
+# Remove qualitative variables
+sub_df %>% 
+  select(-c("region","homeowner","jobcategory", "carbrand", "customer_value")) %>% 
+  add_count(car_segment) %>%
+  group_by(car_segment,n) %>% 
+  summarise_all("mean")
+```
+
+Now that we have created 4 different rule-based segments, let us use Tableu to visualize each to help us select best rules-bases segment to represent our customers.
+
+```{r export sub_df to csv file, include = TRUE, eval = FALSE}
+sub_df %>% 
+  write.csv("segmentation_df.csv")
+```
+
+```{r Unsupervised 1, include = TRUE, eval = FALSE}
+# Let us re-read data in
+sub_df = read.csv("combined_customer_data.csv")
+
+sub_df = sub_df[, -which(names(sub_df) == "X")]
+
+sub_df = sub_df %>%
+  mutate(
+    numberpets = as.numeric(numberpets),
+    householdsize = as.numeric(householdsize),
+    homeowner = ifelse(homeowner == 1, "Yes", "No")
+  )
+
+# Now, let us create subset of data that only has numeric variables
+num_df = sub_df[sapply(sub_df, is.numeric)]
+
+# Let us scale each variable before we perform K-means clustering
+# Assuming num_df contains only numeric variables
+scaled_df = as.data.frame(scale(num_df))
+```
+
+```{r Unsupervised 2, include = TRUE, eval = FALSE}
+# Now, let us take a look and see what K should equal for our clustering segmention
+ks = 1:12
+tot_within_ss = sapply(ks, function(k) {
+    set.seed(1223)
+    cl = kmeans(scaled_df, k)
+    cl$tot.withinss
+})
+plot(ks, tot_within_ss, type = "b")
+```
+
+```{r Unsupervised 3, include = TRUE, eval = FALSE}
+# Based on plot, we see biggest drop off from K = 1 to K = 2.
+# We see that once K = 6, the drop in tot_within_ss value tends to drop relatively constantly as the value of K increases. Therefore, let us use K = 6 for our segmentation.
+
+set.seed(1223)
+num_clusters = 6
+kclust = kmeans(scaled_df, centers = num_clusters, nstart = 10)
+
+#add segments to original dataset
+sub_df$kmeans_six = as.factor(kclust$cluster)
+```
+
+```{r Unsupervised 4, include = TRUE, eval = FALSE}
+sub_df %>% 
+  select(-c("region","homeowner", "jobcategory", "carbrand")) %>% 
+  add_count(kmeans_six) %>%
+  group_by(kmeans_six,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Unsupervised 5, include = TRUE, eval = FALSE}
+# Add K = 5 and K = 7 segments to data set so we can compare them visually
+# K = 5
+set.seed(1223)
+num_clusters = 5
+kclust = kmeans(scaled_df, centers = num_clusters, nstart = 10)
+
+#add segments to original dataset
+sub_df$kmeans_five = as.factor(kclust$cluster)
+
+sub_df %>% 
+  select(-c("region","homeowner", "jobcategory", "carbrand")) %>% 
+  add_count(kmeans_five) %>%
+  group_by(kmeans_five,n) %>% 
+  summarise_all("mean")
+
+# K = 7
+set.seed(1223)
+num_clusters = 7
+kclust = kmeans(scaled_df, centers = num_clusters, nstart = 10)
+
+#add segments to original dataset
+sub_df$kmeans_seven = as.factor(kclust$cluster)
+
+sub_df %>% 
+  select(-c("region","homeowner", "jobcategory", "carbrand")) %>% 
+  add_count(kmeans_seven) %>%
+  group_by(kmeans_seven,n) %>% 
+  summarise_all("mean")
+```
+
+```{r Unsupervised 6, include = TRUE, eval = FALSE}
+# Export sub_df to CSV file again for unsupervised segmentation
+sub_df %>% 
+  write.csv("unsup_segmentation_df.csv")
+```
